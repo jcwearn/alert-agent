@@ -172,18 +172,91 @@ func TestWebhookDoesNotRequeueExistingIncident(t *testing.T) {
 	}
 }
 
-func TestSlackTextEscapesReport(t *testing.T) {
+const sampleReport = `## Summary
+Calibre is **OOMKilled**: its 512Mi limit is below its working set.
+Second summary line.
+
+## Evidence
+- kube_get shows restarts 7
+- <!channel> & <http://evil|click>
+
+## Cause
+Memory limit too low.
+
+## Recommended fix
+pr: raise the limit in ` + "`apps/ebooks/deployment.yaml`" + ` to 1Gi. See [the docs](https://example.com/docs).
+
+## Confidence
+high, the OOMKilled reason is explicit.
+`
+
+func blockTexts(p slackPayload) string {
+	var b strings.Builder
+	for _, bl := range p.Blocks {
+		if bl.Text != nil {
+			b.WriteString(bl.Text.Text + "\n")
+		}
+		for _, e := range bl.Elements {
+			b.WriteString(e.Text + "\n")
+		}
+	}
+	return b.String()
+}
+
+func TestSlackMessageIsConcise(t *testing.T) {
+	in := store.Incident{ID: 3, AlertName: "KubePodCrashLooping", Namespace: "ebooks"}
+	msg := slackMessage("https://ui.example/", in, store.Run{ID: 7, Status: store.RunSucceeded, Report: sampleReport})
+	all := blockTexts(msg)
+
+	for _, want := range []string{
+		"<https://ui.example/runs/7|incident #3>",
+		"*Summary*\nCalibre is *OOMKilled*",
+		"*Recommended fix*\npr: raise the limit",
+		"<https://example.com/docs|the docs>",
+		"*Confidence*\nhigh",
+		"<https://ui.example/runs/7|Full report and transcript>",
+	} {
+		if !strings.Contains(all, want) {
+			t.Errorf("message lacks %q:\n%s", want, all)
+		}
+	}
+	for _, unwanted := range []string{"## ", "Evidence", "Memory limit too low", "<!channel>", "<http://evil"} {
+		if strings.Contains(all, unwanted) {
+			t.Errorf("message contains %q:\n%s", unwanted, all)
+		}
+	}
+	if msg.Text != "Diagnosis: KubePodCrashLooping in ebooks: Calibre is OOMKilled: its 512Mi limit is below its working set." {
+		t.Errorf("preview text = %q", msg.Text)
+	}
+}
+
+func TestSlackMessageWithoutSectionsFallsBack(t *testing.T) {
+	in := store.Incident{ID: 3, AlertName: "X"}
+	msg := slackMessage("https://ui.example", in, store.Run{ID: 7, Status: store.RunSucceeded, Report: "No headings here, <!here>."})
+	if all := blockTexts(msg); !strings.Contains(all, "No headings here") || strings.Contains(all, "<!here>") {
+		t.Errorf("fallback wrong:\n%s", all)
+	}
+}
+
+func TestSlackMessageForFailure(t *testing.T) {
 	in := store.Incident{ID: 3, AlertName: "X", Namespace: "ebooks"}
-	text := slackText("https://ui.example/", in, store.Run{ID: 7, Status: store.RunSucceeded, Report: "<!channel> & <http://evil|click>"})
-	if strings.Contains(text, "<!channel>") || strings.Contains(text, "<http://evil") {
-		t.Errorf("report not escaped: %s", text)
+	msg := slackMessage("https://ui.example", in, store.Run{ID: 7, Status: store.RunFailed, Error: "claude produced no result <boom>"})
+	all := blockTexts(msg)
+	if !strings.Contains(all, "*Agent run failed:*") || !strings.Contains(all, "```claude produced no result &lt;boom&gt;```") {
+		t.Errorf("failure message wrong:\n%s", all)
 	}
-	if !strings.Contains(text, "<https://ui.example/runs/7|incident #3>") {
-		t.Errorf("link missing: %s", text)
+	if msg.Text != "Agent run failed: X in ebooks" {
+		t.Errorf("preview = %q", msg.Text)
 	}
-	failed := slackText("https://ui.example", in, store.Run{ID: 7, Status: store.RunFailed, Error: "boom"})
-	if !strings.Contains(failed, "failed") || !strings.Contains(failed, "boom") {
-		t.Errorf("failure text wrong: %s", failed)
+}
+
+func TestSlackSectionsStayUnderLimit(t *testing.T) {
+	long := "## Summary\n" + strings.Repeat("é", 5000)
+	msg := slackMessage("https://ui.example", store.Incident{ID: 1, AlertName: "X"}, store.Run{ID: 1, Status: store.RunSucceeded, Report: long})
+	for _, bl := range msg.Blocks {
+		if bl.Text != nil && len([]rune(bl.Text.Text)) > sectionLimit {
+			t.Errorf("section has %d runes, limit %d", len([]rune(bl.Text.Text)), sectionLimit)
+		}
 	}
 }
 

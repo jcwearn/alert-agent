@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"regexp"
 	"strings"
 	"time"
 
@@ -27,14 +28,10 @@ type SlackNotifier struct {
 	HTTP       *http.Client
 }
 
-// reportLimit keeps a message readable; the full report is one click away.
-const reportLimit = 2500
-
 // RunFinished posts one message. Failures are logged, not retried: the run
 // and its report are already safe in the database.
 func (n *SlackNotifier) RunFinished(ctx context.Context, in store.Incident, run store.Run) {
-	text := slackText(n.PublicURL, in, run)
-	body, err := json.Marshal(map[string]string{"text": text})
+	body, err := json.Marshal(slackMessage(n.PublicURL, in, run))
 	if err != nil {
 		return
 	}
@@ -61,31 +58,147 @@ func (n *SlackNotifier) RunFinished(ctx context.Context, in store.Incident, run 
 	}
 }
 
-func slackText(publicURL string, in store.Incident, run store.Run) string {
-	link := fmt.Sprintf("<%s/runs/%d|incident #%d>", strings.TrimRight(publicURL, "/"), run.ID, in.ID)
+// slackPayload is an incoming-webhook message: Block Kit blocks for the
+// channel, and plain text for the push notification preview, which shows
+// `text` and not the blocks.
+type slackPayload struct {
+	Text   string       `json:"text"`
+	Blocks []slackBlock `json:"blocks"`
+}
+
+type slackBlock struct {
+	Type     string       `json:"type"`
+	Text     *slackText   `json:"text,omitempty"`
+	Elements []*slackText `json:"elements,omitempty"`
+}
+
+type slackText struct {
+	Type string `json:"type"`
+	Text string `json:"text"`
+}
+
+func mrkdwnSection(s string) slackBlock {
+	return slackBlock{Type: "section", Text: &slackText{Type: "mrkdwn", Text: clipRunes(s, sectionLimit)}}
+}
+
+// sectionLimit is Slack's cap on a section block's text.
+const sectionLimit = 3000
+
+// notifySections are the parts of a report worth a notification. Evidence,
+// cause and asides stay on the run page, one click away.
+var notifySections = []string{"Summary", "Recommended fix", "Confidence"}
+
+func slackMessage(publicURL string, in store.Incident, run store.Run) slackPayload {
+	runURL := fmt.Sprintf("%s/runs/%d", strings.TrimRight(publicURL, "/"), run.ID)
 	where := in.AlertName
 	if in.Namespace != "" {
 		where += " in " + in.Namespace
 	}
+	link := fmt.Sprintf("<%s|incident #%d>", runURL, in.ID)
 
-	var b strings.Builder
-	switch run.Status {
-	case store.RunSucceeded:
-		fmt.Fprintf(&b, ":mag: Diagnosis: %s (%s)\n", slackEscape(where), link)
-		report := run.Report
-		if len(report) > reportLimit {
-			report = report[:reportLimit] + "\n… (truncated; full report at the link)"
+	if run.Status != store.RunSucceeded {
+		return slackPayload{
+			Text: "Agent run failed: " + where,
+			Blocks: []slackBlock{
+				mrkdwnSection(fmt.Sprintf(":warning: *Agent run failed:* %s (%s)", slackEscape(where), link)),
+				mrkdwnSection("```" + slackEscape(clipRunes(run.Error, 2000)) + "```"),
+			},
 		}
-		b.WriteString(slackEscape(report))
-	default:
-		fmt.Fprintf(&b, ":warning: Agent run failed: %s (%s)\n", slackEscape(where), link)
-		b.WriteString(slackEscape(run.Error))
 	}
-	return b.String()
+
+	sections := reportSections(run.Report)
+	blocks := []slackBlock{mrkdwnSection(fmt.Sprintf(":mag: *Diagnosis:* %s (%s)", slackEscape(where), link))}
+	found := false
+	for _, name := range notifySections {
+		body, ok := sections[strings.ToLower(name)]
+		if !ok || strings.TrimSpace(body) == "" {
+			continue
+		}
+		found = true
+		blocks = append(blocks, mrkdwnSection("*"+name+"*\n"+toMrkdwn(body)))
+	}
+	if !found {
+		// A report that ignored the requested shape: send it whole, clipped.
+		blocks = append(blocks, mrkdwnSection(toMrkdwn(run.Report)))
+	}
+	blocks = append(blocks, slackBlock{Type: "context", Elements: []*slackText{
+		{Type: "mrkdwn", Text: fmt.Sprintf("<%s|Full report and transcript>", runURL)},
+	}})
+
+	preview := "Diagnosis: " + where
+	if s := firstLine(sections["summary"]); s != "" {
+		preview += ": " + clipRunes(plainText(s), 150)
+	}
+	return slackPayload{Text: preview, Blocks: blocks}
+}
+
+// reportSections splits a Markdown report on its "## " headings, keyed by
+// lower-cased heading.
+func reportSections(report string) map[string]string {
+	out := map[string]string{}
+	var name string
+	var body strings.Builder
+	flush := func() {
+		if name != "" {
+			out[name] = strings.TrimSpace(body.String())
+		}
+		body.Reset()
+	}
+	for _, line := range strings.Split(report, "\n") {
+		if h, ok := strings.CutPrefix(line, "## "); ok {
+			flush()
+			name = strings.ToLower(strings.TrimSpace(h))
+			continue
+		}
+		body.WriteString(line)
+		body.WriteString("\n")
+	}
+	flush()
+	return out
+}
+
+var (
+	mdBold    = regexp.MustCompile(`\*\*([^*\n]+)\*\*`)
+	mdLink    = regexp.MustCompile(`\[([^\]\n]+)\]\((https?://[^)\s]+)\)`)
+	mdHeading = regexp.MustCompile(`(?m)^#{1,6}\s+(.+)$`)
+	mdBullet  = regexp.MustCompile(`(?m)^(\s*)[-*]\s+`)
+)
+
+// toMrkdwn converts the Markdown the agent writes into Slack's mrkdwn:
+// headings and **bold** become *bold*, [text](url) becomes <url|text>, and
+// list markers become bullets. Text is escaped first, so report content can
+// never forge a mention or a link of its own.
+func toMrkdwn(md string) string {
+	s := slackEscape(md)
+	s = mdHeading.ReplaceAllString(s, "*$1*")
+	s = mdBullet.ReplaceAllString(s, "$1• ")
+	s = mdBold.ReplaceAllString(s, "*$1*")
+	s = mdLink.ReplaceAllString(s, "<$2|$1>")
+	return s
 }
 
 // slackEscape escapes the three characters Slack treats as control
 // sequences, so report text cannot forge links or mentions.
 func slackEscape(s string) string {
 	return strings.NewReplacer("&", "&amp;", "<", "&lt;", ">", "&gt;").Replace(s)
+}
+
+// plainText strips Markdown emphasis and code markers for the push preview,
+// which shows them literally.
+func plainText(s string) string {
+	return strings.NewReplacer("**", "", "__", "", "`", "").Replace(s)
+}
+
+func firstLine(s string) string {
+	line, _, _ := strings.Cut(strings.TrimSpace(s), "\n")
+	return strings.TrimSpace(line)
+}
+
+// clipRunes shortens s to at most n runes, never splitting a character.
+func clipRunes(s string, n int) string {
+	r := []rune(s)
+	if len(r) <= n {
+		return s
+	}
+	return string(r[:n-1]) + "…"
 }
