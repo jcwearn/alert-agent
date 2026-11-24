@@ -295,9 +295,10 @@ func TestProposePR(t *testing.T) {
 			t.Errorf("PR body lacks %q:\n%s", want, got.Body)
 		}
 	}
-	// Tokens are minted per purpose: write contents to push, write PRs to open.
+	// Tokens are minted per purpose: write contents to push; write PRs, and
+	// read the refs (GitHub refuses with 422 otherwise), to open.
 	if len(gh.perms) != 2 || gh.perms[0]["contents"] != "write" || len(gh.perms[0]) != 1 ||
-		gh.perms[1]["pull_requests"] != "write" || len(gh.perms[1]) != 1 {
+		gh.perms[1]["pull_requests"] != "write" || gh.perms[1]["contents"] != "read" || len(gh.perms[1]) != 2 {
 		t.Errorf("token permissions = %v", gh.perms)
 	}
 
@@ -403,7 +404,7 @@ func TestPollPRs(t *testing.T) {
 	if len(rev.prs) != 0 {
 		t.Fatal("notified before checks settled")
 	}
-	if p := gh.perms[len(gh.perms)-1]; p["pull_requests"] != "read" || p["checks"] != "read" || len(p) != 2 {
+	if p := gh.perms[len(gh.perms)-1]; p["pull_requests"] != "read" || p["checks"] != "read" || p["contents"] != "read" || len(p) != 3 {
 		t.Errorf("poll token permissions = %v", p)
 	}
 
