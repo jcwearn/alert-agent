@@ -8,8 +8,7 @@ FROM golang:1.27@sha256:205c7636d74e0ffbe3d007162df7d74f859f5a8c8322dfb9f9079776
 
 WORKDIR /src
 
-# go.sum joins this line with the first dependency.
-COPY go.mod ./
+COPY go.mod go.sum ./
 RUN go mod download
 
 COPY cmd/ cmd/
