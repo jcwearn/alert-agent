@@ -107,7 +107,10 @@ func (s *Server) propose(ctx context.Context, run store.Run, in ProposeInput) (s
 		return store.PullRequest{}, err
 	}
 
-	prToken, err := p.GitHub.InstallationToken(ctx, []string{p.repoName()}, map[string]string{"pull_requests": "write"})
+	// Opening a PR also reads its head and base refs: without contents:read,
+	// GitHub answers 422 "not all refs are readable".
+	prToken, err := p.GitHub.InstallationToken(ctx, []string{p.repoName()},
+		map[string]string{"pull_requests": "write", "contents": "read"})
 	if err != nil {
 		return store.PullRequest{}, fmt.Errorf("github token: %w", err)
 	}
@@ -192,7 +195,7 @@ func (s *Server) PollPRsOnce(ctx context.Context) error {
 	}
 	p := s.prs
 	tok, err := p.GitHub.InstallationToken(ctx, []string{p.repoName()},
-		map[string]string{"pull_requests": "read", "checks": "read"})
+		map[string]string{"pull_requests": "read", "checks": "read", "contents": "read"})
 	if err != nil {
 		return fmt.Errorf("github token: %w", err)
 	}
