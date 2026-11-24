@@ -17,9 +17,8 @@ type Reviewer interface {
 	NeedsReview(ctx context.Context, pr store.PullRequest, incidentURL string) error
 }
 
-// NtfyReviewer publishes "needs your review" to an ntfy topic. ntfy is kept
-// for exactly this: diagnoses go to Slack, so a push means there is
-// something to do.
+// NtfyReviewer publishes "needs your review" to an ntfy topic. Diagnoses go
+// to Slack only, so a push means there is something to do.
 type NtfyReviewer struct {
 	BaseURL string // e.g. http://ntfy-svc.ntfy.svc.cluster.local:4080
 	Topic   string

@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net/http"
@@ -20,9 +21,10 @@ type Notifier interface {
 	RunFinished(ctx context.Context, in store.Incident, run store.Run, pr *store.PullRequest)
 }
 
-// SlackNotifier posts run results to a Slack incoming webhook. Diagnoses go
-// to Slack only; ntfy is kept for "needs your review" from Phase 3 on, so a
-// diagnosis does not double the pushes an alert already caused.
+// SlackNotifier posts run results to a Slack incoming webhook, and the
+// "needs your review" notice for a PR. Diagnoses go to Slack only, so a
+// diagnosis does not double the pushes an alert already caused; review
+// notices go to both Slack and ntfy.
 type SlackNotifier struct {
 	WebhookURL string
 	PublicURL  string
@@ -32,16 +34,27 @@ type SlackNotifier struct {
 // RunFinished posts one message. Failures are logged, not retried: the run
 // and its report are already safe in the database.
 func (n *SlackNotifier) RunFinished(ctx context.Context, in store.Incident, run store.Run, pr *store.PullRequest) {
-	body, err := json.Marshal(slackMessage(n.PublicURL, in, run, pr))
+	if err := n.post(ctx, slackMessage(n.PublicURL, in, run, pr)); err != nil {
+		slog.Error("slack notify", "run", run.ID, "err", err)
+	}
+}
+
+// NeedsReview posts the "needs your review" notice for a PR whose checks
+// have settled, alongside the ntfy push.
+func (n *SlackNotifier) NeedsReview(ctx context.Context, pr store.PullRequest, incidentURL string) error {
+	return n.post(ctx, slackReviewMessage(pr, incidentURL))
+}
+
+func (n *SlackNotifier) post(ctx context.Context, msg slackPayload) error {
+	body, err := json.Marshal(msg)
 	if err != nil {
-		return
+		return err
 	}
 	ctx, cancel := context.WithTimeout(ctx, 15*time.Second)
 	defer cancel()
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, n.WebhookURL, bytes.NewReader(body))
 	if err != nil {
-		slog.Error("slack request", "err", err)
-		return
+		return err
 	}
 	req.Header.Set("Content-Type", "application/json")
 	client := n.HTTP
@@ -50,13 +63,49 @@ func (n *SlackNotifier) RunFinished(ctx context.Context, in store.Incident, run 
 	}
 	resp, err := client.Do(req)
 	if err != nil {
-		slog.Error("slack notify", "run", run.ID, "err", err)
-		return
+		return err
 	}
 	_ = resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
-		slog.Error("slack notify", "run", run.ID, "status", resp.Status)
+		return fmt.Errorf("slack answered %s", resp.Status)
 	}
+	return nil
+}
+
+func slackReviewMessage(pr store.PullRequest, incidentURL string) slackPayload {
+	where := pr.AlertName
+	if pr.Namespace != "" {
+		where += " in " + pr.Namespace
+	}
+	incident := fmt.Sprintf("incident #%d", pr.IncidentID)
+	if strings.HasPrefix(incidentURL, "http") {
+		incident = fmt.Sprintf("<%s|%s>", incidentURL, incident)
+	}
+	checks := map[string]string{
+		store.ChecksSuccess: ":white_check_mark: CI passed.",
+		store.ChecksFailure: ":x: CI failed.",
+		store.ChecksPending: ":hourglass_flowing_sand: CI still running.",
+	}[pr.Checks]
+	return slackPayload{
+		Text: fmt.Sprintf("Review PR #%d: %s", pr.Number, pr.Title),
+		Blocks: []slackBlock{mrkdwnSection(fmt.Sprintf(":wrench: *Review* <%s|PR #%d> %s\nProposed for %s (%s). %s",
+			pr.URL, pr.Number, slackEscape(pr.Title), incident, slackEscape(where), checks))},
+	}
+}
+
+// Reviewers sends a review notice to every reviewer, so one failing channel
+// does not silence the others.
+type Reviewers []Reviewer
+
+// NeedsReview notifies each reviewer and returns their errors joined.
+func (rs Reviewers) NeedsReview(ctx context.Context, pr store.PullRequest, incidentURL string) error {
+	var errs []error
+	for _, r := range rs {
+		if err := r.NeedsReview(ctx, pr, incidentURL); err != nil {
+			errs = append(errs, err)
+		}
+	}
+	return errors.Join(errs...)
 }
 
 // slackPayload is an incoming-webhook message: Block Kit blocks for the
