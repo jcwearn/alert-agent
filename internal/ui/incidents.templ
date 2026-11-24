@@ -8,7 +8,7 @@ import (
 )
 
 // IncidentList is the home page.
-templ IncidentList(incidents []store.Incident, awaiting []store.PullRequest, now time.Time) {
+templ IncidentList(incidents []IncidentRow, awaiting []store.PullRequest, now time.Time) {
 	@layout("Incidents") {
 		if len(awaiting) > 0 {
 			<h1>Awaiting review ({ strconv.Itoa(len(awaiting)) })</h1>
@@ -62,13 +62,17 @@ templ IncidentList(incidents []store.Incident, awaiting []store.PullRequest, now
 						for _, in := range incidents {
 							<tr>
 								<td>
-									@statusBadge(in.AlertStatus)
+									@statusBadge(in.Status)
 								</td>
 								<td>
-									<a href={ templ.SafeURL("/incidents/" + strconv.FormatInt(in.ID, 10)) }>{ in.AlertName }</a>
+									<a href={ incidentURL(in.ID) }>{ in.AlertName }</a>
 									if in.AlertCount > 1 {
 										<span class="muted">× { strconv.Itoa(in.AlertCount) }</span>
 									}
+									if len(in.Children) > 0 {
+										<span class="muted">+{ strconv.Itoa(len(in.Children)) } merged</span>
+									}
+									@linkChips(in.Links)
 									if in.Summary != "" {
 										<div class="muted">{ in.Summary }</div>
 									}
@@ -77,6 +81,21 @@ templ IncidentList(incidents []store.Incident, awaiting []store.PullRequest, now
 								<td class="hide-narrow">{ in.Severity }</td>
 								<td title={ stamp(in.OpenedAt) }>{ ago(in.OpenedAt, now) }</td>
 							</tr>
+							for _, c := range in.Children {
+								<tr class="child">
+									<td>
+										@statusBadge(c.AlertStatus)
+									</td>
+									<td>
+										<span class="muted">↳ merged</span>
+										<a href={ incidentURL(c.ID) }>{ c.AlertName }</a>
+										@linkChips(c.Links)
+									</td>
+									<td class="hide-narrow">{ c.Namespace }</td>
+									<td class="hide-narrow">{ c.Severity }</td>
+									<td title={ stamp(c.OpenedAt) }>{ ago(c.OpenedAt, now) }</td>
+								</tr>
+							}
 						}
 					</tbody>
 				</table>
@@ -85,34 +104,75 @@ templ IncidentList(incidents []store.Incident, awaiting []store.PullRequest, now
 	}
 }
 
-// IncidentDetail is one incident and its alerts.
-templ IncidentDetail(in store.Incident, alerts []store.IncidentAlert, runs []store.Run, pr *store.PullRequest) {
-	@layout(in.AlertName) {
+templ linkChips(ids []int64) {
+	for _, id := range ids {
+		<a class="chip" href={ incidentURL(id) } title="related incident">↔ { idStr(id) }</a>
+	}
+}
+
+// IncidentDetail is one incident: its alerts, runs, PR, related incidents
+// and audit trail.
+templ IncidentDetail(p IncidentPage) {
+	@layout(p.Incident.AlertName) {
 		<h1>
-			@statusBadge(in.AlertStatus)
-			{ in.AlertName }
+			@statusBadge(p.Incident.AlertStatus)
+			{ p.Incident.AlertName }
 		</h1>
+		if p.Notice != "" {
+			<div class="card notice">{ p.Notice }</div>
+		}
+		if p.Problem != "" {
+			<div class="card notice error">{ p.Problem }</div>
+		}
+		if p.Incident.ParentID != nil {
+			<div class="card merged">
+				<p>
+					Merged into
+					<a href={ incidentURL(*p.Incident.ParentID) }>
+						{ idStr(*p.Incident.ParentID) }
+						if p.Parent != nil {
+							{ p.Parent.AlertName }
+						}
+					</a>
+					by
+					if u, ok := mergedByRun(p.Incident.MergedBy); ok {
+						<a href={ u }>{ mergedByLabel(p.Incident.MergedBy) }</a>
+					} else {
+						{ mergedByLabel(p.Incident.MergedBy) }
+					}
+					if p.Incident.MergedAt != nil {
+						<span class="muted">· { stamp(*p.Incident.MergedAt) }</span>
+					}
+				</p>
+				if p.Incident.MergeReason != "" {
+					<p class="muted">{ p.Incident.MergeReason }</p>
+				}
+				<form method="post" action={ templ.SafeURL("/incidents/" + strconv.FormatInt(p.Incident.ID, 10) + "/unmerge") }>
+					<button type="submit">Unmerge</button>
+				</form>
+			</div>
+		}
 		<div class="card">
 			<dl>
 				<dt>Incident</dt>
-				<dd>#{ strconv.FormatInt(in.ID, 10) }</dd>
+				<dd>{ idStr(p.Incident.ID) }</dd>
 				<dt>Namespace</dt>
-				<dd>{ in.Namespace }</dd>
+				<dd>{ p.Incident.Namespace }</dd>
 				<dt>Severity</dt>
-				<dd>{ in.Severity }</dd>
+				<dd>{ p.Incident.Severity }</dd>
 				<dt>Summary</dt>
-				<dd>{ in.Summary }</dd>
+				<dd>{ p.Incident.Summary }</dd>
 				<dt>Opened</dt>
-				<dd>{ stamp(in.OpenedAt) }</dd>
+				<dd>{ stamp(p.Incident.OpenedAt) }</dd>
 				<dt>Last update</dt>
-				<dd>{ stamp(in.UpdatedAt) }</dd>
-				if in.ResolvedAt != nil {
+				<dd>{ stamp(p.Incident.UpdatedAt) }</dd>
+				if p.Incident.ResolvedAt != nil {
 					<dt>Resolved</dt>
-					<dd>{ stamp(*in.ResolvedAt) }</dd>
+					<dd>{ stamp(*p.Incident.ResolvedAt) }</dd>
 				}
 			</dl>
 		</div>
-		if pr != nil {
+		if pr := p.PR; pr != nil {
 			<h2>Pull request</h2>
 			<div class="card">
 				<p>
@@ -137,9 +197,10 @@ templ IncidentDetail(in store.Incident, alerts []store.IncidentAlert, runs []sto
 				</dl>
 			</div>
 		}
-		@runList(runs)
-		<h2>Alerts ({ strconv.Itoa(len(alerts)) })</h2>
-		for _, a := range alerts {
+		@related(p)
+		@runList(p.Runs)
+		<h2>Alerts ({ strconv.Itoa(len(p.Alerts)) })</h2>
+		for _, a := range p.Alerts {
 			<div class="card">
 				<p>
 					@statusBadge(a.Status)
@@ -158,5 +219,123 @@ templ IncidentDetail(in store.Incident, alerts []store.IncidentAlert, runs []sto
 				</div>
 			</div>
 		}
+		@activity(p.Actions)
+	}
+}
+
+// related shows merged children and links, with the forms that change them.
+templ related(p IncidentPage) {
+	<h2>Related</h2>
+	<div class="card">
+		if len(p.Children) > 0 {
+			<p class="muted">Merged into this incident:</p>
+			<ul class="plain">
+				for _, c := range p.Children {
+					<li>
+						@statusBadge(c.AlertStatus)
+						<a href={ incidentURL(c.ID) }>{ idStr(c.ID) } { c.AlertName }</a>
+						<span class="muted">by { mergedByLabel(c.MergedBy) }: { c.MergeReason }</span>
+					</li>
+				}
+			</ul>
+		}
+		if len(p.Links) > 0 {
+			<p class="muted">Linked as related:</p>
+			<ul class="plain">
+				for _, l := range p.Links {
+					<li>
+						@statusBadge(l.Other.AlertStatus)
+						<a href={ incidentURL(l.Other.ID) }>{ idStr(l.Other.ID) } { l.Other.AlertName }</a>
+						<span class="muted">{ l.Other.Namespace } · { l.Reason }</span>
+						<form class="inline" method="post" action={ templ.SafeURL("/incidents/" + strconv.FormatInt(p.Incident.ID, 10) + "/unlink") }>
+							<input type="hidden" name="other" value={ strconv.FormatInt(l.Other.ID, 10) }/>
+							<button type="submit">Unlink</button>
+						</form>
+					</li>
+				}
+			</ul>
+		}
+		if len(p.Children) == 0 && len(p.Links) == 0 {
+			<p class="muted">No merged or linked incidents.</p>
+		}
+		if len(p.Candidates) > 0 {
+			<div class="forms">
+				if p.Incident.ParentID == nil {
+					@pickerForm(p, "merge", "into", "Merge into…", "Same problem: this incident folds into the one you pick.")
+				}
+				@pickerForm(p, "link", "other", "Link to…", "Related, but a different problem.")
+			</div>
+		}
+	</div>
+}
+
+templ pickerForm(p IncidentPage, action, field, label, hint string) {
+	<form method="post" action={ templ.SafeURL("/incidents/" + strconv.FormatInt(p.Incident.ID, 10) + "/" + action) }>
+		<label>
+			<span>{ label }</span>
+			<select name={ field } required>
+				<option value="">choose an incident</option>
+				for _, c := range p.Candidates {
+					<option value={ strconv.FormatInt(c.ID, 10) }>{ candidateLabel(c) }</option>
+				}
+			</select>
+		</label>
+		<input type="text" name="reason" maxlength="1024" placeholder="reason (optional)"/>
+		<button type="submit">{ label }</button>
+		<div class="muted hint">{ hint }</div>
+	</form>
+}
+
+// activity is the incident's audit trail: every tool call and every merge
+// or link that names it, by the agent or a human.
+templ activity(actions []store.Action) {
+	<h2>Activity ({ strconv.Itoa(len(actions)) })</h2>
+	if len(actions) == 0 {
+		<p class="muted">Nothing recorded yet.</p>
+	} else {
+		<div class="table-wrap">
+			<table>
+				<thead>
+					<tr>
+						<th>When</th>
+						<th>Action</th>
+						<th>By</th>
+						<th>Outcome</th>
+					</tr>
+				</thead>
+				<tbody>
+					for _, a := range actions {
+						<tr>
+							<td>{ stamp(a.CreatedAt) }</td>
+							<td>
+								<span class="mono">{ a.Tool }</span>
+								<span class="muted">
+									{ idStr(a.IncidentID) }
+									if a.TargetIncidentID != nil {
+										→ { idStr(*a.TargetIncidentID) }
+									}
+								</span>
+								if s := actionSummary(a); s != "" {
+									<div class="muted">{ s }</div>
+								}
+							</td>
+							<td>
+								if a.RunID != nil {
+									<a href={ runURL(*a.RunID) }>{ actorLabel(a) } · run #{ strconv.FormatInt(*a.RunID, 10) }</a>
+								} else {
+									{ actorLabel(a) }
+								}
+							</td>
+							<td>
+								@statusBadge(a.Status)
+								if a.Result != "" {
+									<div class="muted">{ a.Result }</div>
+								}
+							</td>
+						</tr>
+					}
+				</tbody>
+			</table>
+		</div>
 	}
 }

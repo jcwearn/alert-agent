@@ -10,7 +10,7 @@ func runningRun(t *testing.T, s *Store) Run {
 	t.Helper()
 	ctx := t.Context()
 	incident := firingIncident(t, s)
-	if _, err := s.EnqueueRun(ctx, incident); err != nil {
+	if _, _, err := s.EnqueueRun(ctx, incident, 0); err != nil {
 		t.Fatal(err)
 	}
 	run, ok, err := s.ClaimNextRun(ctx, []byte("hash"), "alert-agent-run-", "opus")
@@ -53,7 +53,8 @@ func TestPullRequestLifecycle(t *testing.T) {
 		t.Fatalf("want ErrNotFound, got %v", err)
 	}
 	pr := PullRequest{IncidentID: run.IncidentID, RunID: run.ID, Number: 42, URL: "https://github.com/o/r/pull/42",
-		Title: "fix(x): y", Branch: "agent/1", BaseSHA: "aaa", HeadSHA: "bbb"}
+		Title: "fix(x): y", Branch: "agent/1", BaseSHA: "aaa", HeadSHA: "bbb",
+		Files: []string{"apps/x/deployment.yaml"}}
 	id, err := s.InsertPullRequest(ctx, pr)
 	if err != nil {
 		t.Fatal(err)
@@ -64,7 +65,8 @@ func TestPullRequestLifecycle(t *testing.T) {
 	}
 
 	got, err := s.PullRequestForIncident(ctx, run.IncidentID)
-	if err != nil || got.ID != id || got.State != PROpen || got.Checks != ChecksPending || got.AlertName == "" {
+	if err != nil || got.ID != id || got.State != PROpen || got.Checks != ChecksPending || got.AlertName == "" ||
+		len(got.Files) != 1 || got.Files[0] != "apps/x/deployment.yaml" {
 		t.Fatalf("got %+v, %v", got, err)
 	}
 	open, err := s.OpenPullRequests(ctx)

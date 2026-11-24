@@ -73,7 +73,7 @@ templ runList(runs []store.Run) {
 }
 
 // RunDetail is one run: its report, then the full transcript.
-templ RunDetail(in store.Incident, run store.Run, items []TranscriptItem) {
+templ RunDetail(in store.Incident, run store.Run, covers []int64, items []TranscriptItem) {
 	@layout("Run #" + strconv.FormatInt(run.ID, 10)) {
 		<h1>
 			@statusBadge(run.Status)
@@ -83,6 +83,14 @@ templ RunDetail(in store.Incident, run store.Run, items []TranscriptItem) {
 			<dl>
 				<dt>Incident</dt>
 				<dd><a href={ incidentURL(in.ID) }>#{ strconv.FormatInt(in.ID, 10) } { in.AlertName }</a> <span class="muted">{ in.Namespace }</span></dd>
+				if len(covers) > 1 {
+					<dt>Covers</dt>
+					<dd>
+						for _, id := range covers {
+							<a class="chip" href={ incidentURL(id) }>{ idStr(id) }</a>
+						}
+					</dd>
+				}
 				<dt>Model</dt>
 				<dd>{ run.Model }</dd>
 				<dt>Session</dt>

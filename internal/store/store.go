@@ -59,7 +59,18 @@ type Incident struct {
 	UpdatedAt   time.Time
 	ResolvedAt  *time.Time
 	AlertCount  int
+
+	// ParentID is the incident this one was merged into, if any.
+	ParentID    *int64
+	MergedAt    *time.Time
+	MergedBy    string // "run:<id>" or "ui"
+	MergeReason string
+	// Links are the ids of incidents linked to this one as related.
+	Links []int64
 }
+
+// Merged reports whether the incident was merged into another.
+func (in Incident) Merged() bool { return in.ParentID != nil }
 
 // IncidentAlert is one alert attached to an incident.
 type IncidentAlert struct {
@@ -191,12 +202,17 @@ func nonNil(m map[string]string) map[string]string {
 const incidentColumns = `
 	i.id, i.alertname, i.namespace, i.severity, i.summary, i.alert_status,
 	i.opened_at, i.updated_at, i.resolved_at,
-	(SELECT count(*) FROM incident_alerts a WHERE a.incident_id = i.id)`
+	(SELECT count(*) FROM incident_alerts a WHERE a.incident_id = i.id),
+	i.parent_id, i.merged_at, i.merged_by, i.merge_reason,
+	ARRAY(SELECT CASE WHEN l.a = i.id THEN l.b ELSE l.a END FROM incident_links l
+		WHERE l.a = i.id OR l.b = i.id ORDER BY 1)`
 
-func scanIncident(row pgx.Row) (Incident, error) {
+// scanIncident reads incidentColumns, then any extra columns into extra.
+func scanIncident(row pgx.Row, extra ...any) (Incident, error) {
 	var in Incident
-	err := row.Scan(&in.ID, &in.AlertName, &in.Namespace, &in.Severity, &in.Summary, &in.AlertStatus,
-		&in.OpenedAt, &in.UpdatedAt, &in.ResolvedAt, &in.AlertCount)
+	err := row.Scan(append([]any{&in.ID, &in.AlertName, &in.Namespace, &in.Severity, &in.Summary, &in.AlertStatus,
+		&in.OpenedAt, &in.UpdatedAt, &in.ResolvedAt, &in.AlertCount,
+		&in.ParentID, &in.MergedAt, &in.MergedBy, &in.MergeReason, &in.Links}, extra...)...)
 	return in, err
 }
 

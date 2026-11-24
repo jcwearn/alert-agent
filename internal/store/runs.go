@@ -64,21 +64,67 @@ func scanRun(row pgx.Row) (Run, error) {
 	return r, err
 }
 
-// EnqueueRun queues a run for an incident.
-func (s *Store) EnqueueRun(ctx context.Context, incidentID int64) (int64, error) {
-	var id int64
-	err := s.pool.QueryRow(ctx,
-		`INSERT INTO runs (incident_id, status) VALUES ($1, 'queued') RETURNING id`, incidentID,
-	).Scan(&id)
-	return id, err
+// EnqueueRun queues a run for an incident. With a hold, the run waits that
+// long before it can start, and an incident that opens meanwhile in the same
+// namespace joins it instead of getting a run of its own: a burst of alerts
+// about one problem costs one run. batched says the incident joined an
+// existing held run, whose id is returned.
+//
+// The window is fixed from the first incident; it does not slide.
+func (s *Store) EnqueueRun(ctx context.Context, incidentID int64, hold time.Duration) (runID int64, batched bool, err error) {
+	err = pgx.BeginFunc(ctx, s.pool, func(tx pgx.Tx) error {
+		batched = false
+		// Serialise enqueues, so two incidents of one burst cannot both miss
+		// each other's held run.
+		if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtext('alert-agent enqueue'))`); err != nil {
+			return err
+		}
+		if hold > 0 {
+			err := tx.QueryRow(ctx, `
+				SELECT r.id FROM runs r
+				JOIN incidents primary_i ON primary_i.id = r.incident_id
+				JOIN incidents new_i ON new_i.id = $1
+				WHERE r.status = 'queued' AND r.hold_until > now()
+					AND primary_i.namespace = new_i.namespace
+				ORDER BY r.id LIMIT 1`, incidentID).Scan(&runID)
+			switch {
+			case err == nil:
+				batched = true
+			case !errors.Is(err, pgx.ErrNoRows):
+				return fmt.Errorf("find held run: %w", err)
+			}
+		}
+		if !batched {
+			// The database's clock, like the claim's comparison.
+			if err := tx.QueryRow(ctx, `
+				INSERT INTO runs (incident_id, status, hold_until)
+				VALUES ($1, 'queued', CASE WHEN $2 > 0 THEN now() + make_interval(secs => $2) END)
+				RETURNING id`,
+				incidentID, hold.Seconds()).Scan(&runID); err != nil {
+				return fmt.Errorf("insert run: %w", err)
+			}
+		}
+		_, err := tx.Exec(ctx, `INSERT INTO run_incidents (run_id, incident_id) VALUES ($1, $2)
+			ON CONFLICT DO NOTHING`, runID, incidentID)
+		return err
+	})
+	return runID, batched, err
 }
 
-// ClaimNextRun moves the oldest queued run to running, recording the token
-// hash, Job name and model. Queued runs whose incident has already resolved
-// are marked skipped on the way: there is nothing left to diagnose, and every
-// run spends the subscription's usage.
+// liveMember is true for a run's incident that still needs the agent: firing,
+// and not merged into another.
+const liveMember = `EXISTS (SELECT 1 FROM run_incidents ri JOIN incidents i ON i.id = ri.incident_id
+	WHERE ri.run_id = r.id AND i.alert_status = 'firing' AND i.parent_id IS NULL)`
+
+// ClaimNextRun moves the oldest queued run whose hold has passed to running,
+// recording the token hash, Job name and model. Queued runs none of whose
+// incidents still need the agent (all resolved or merged) are marked skipped
+// on the way: there is nothing left to diagnose, and every run spends the
+// subscription's usage. If the claimed run's primary incident no longer
+// needs the agent but another of its incidents does, that one becomes the
+// primary.
 //
-// It returns false when nothing is queued, or when a run is already running
+// It returns false when nothing is ready, or when a run is already running
 // (the runs_one_running index refuses a second one).
 func (s *Store) ClaimNextRun(ctx context.Context, tokenHash []byte, jobPrefix, model string) (Run, bool, error) {
 	var run Run
@@ -87,9 +133,8 @@ func (s *Store) ClaimNextRun(ctx context.Context, tokenHash []byte, jobPrefix, m
 		claimed = false
 		if _, err := tx.Exec(ctx, `
 			UPDATE runs r SET status = 'skipped', finished_at = now(),
-				error = 'incident resolved before the agent started'
-			FROM incidents i
-			WHERE r.incident_id = i.id AND r.status = 'queued' AND i.alert_status = 'resolved'`,
+				error = 'every incident resolved or was merged before the agent started'
+			WHERE r.status = 'queued' AND NOT `+liveMember,
 		); err != nil {
 			return fmt.Errorf("skip resolved: %w", err)
 		}
@@ -105,9 +150,16 @@ func (s *Store) ClaimNextRun(ctx context.Context, tokenHash []byte, jobPrefix, m
 
 		row := tx.QueryRow(ctx, `
 			UPDATE runs SET status = 'running', started_at = now(), token_hash = $1,
-				job_name = $2 || id::text, model = $3
+				job_name = $2 || id::text, model = $3,
+				incident_id = COALESCE((
+					SELECT i.id FROM incidents i
+					WHERE i.id = runs.incident_id AND i.alert_status = 'firing' AND i.parent_id IS NULL
+				), (
+					SELECT min(i.id) FROM run_incidents ri JOIN incidents i ON i.id = ri.incident_id
+					WHERE ri.run_id = runs.id AND i.alert_status = 'firing' AND i.parent_id IS NULL
+				), runs.incident_id)
 			WHERE id = (
-				SELECT id FROM runs WHERE status = 'queued'
+				SELECT id FROM runs WHERE status = 'queued' AND (hold_until IS NULL OR hold_until <= now())
 				ORDER BY id LIMIT 1 FOR UPDATE SKIP LOCKED
 			)
 			RETURNING `+runColumns, tokenHash, jobPrefix, model)
@@ -122,6 +174,39 @@ func (s *Store) ClaimNextRun(ctx context.Context, tokenHash []byte, jobPrefix, m
 		return nil
 	})
 	return run, claimed, err
+}
+
+// RunIncidents returns the incidents a run covers: its primary first, then
+// the rest of its batch in the order they joined.
+func (s *Store) RunIncidents(ctx context.Context, runID int64) ([]int64, error) {
+	rows, err := s.pool.Query(ctx, `
+		SELECT ri.incident_id FROM run_incidents ri JOIN runs r ON r.id = ri.run_id
+		WHERE ri.run_id = $1
+		ORDER BY ri.incident_id = r.incident_id DESC, ri.added_at, ri.incident_id`, runID)
+	if err != nil {
+		return nil, err
+	}
+	return pgx.CollectRows(rows, pgx.RowTo[int64])
+}
+
+// LeftoverIncidents returns a finished run's batch members that still need
+// the agent: not the primary, still firing, not merged, and with no other
+// run queued or running for them. Each gets a run of its own.
+func (s *Store) LeftoverIncidents(ctx context.Context, runID int64) ([]int64, error) {
+	rows, err := s.pool.Query(ctx, `
+		SELECT i.id FROM run_incidents ri
+		JOIN runs r ON r.id = ri.run_id
+		JOIN incidents i ON i.id = ri.incident_id
+		WHERE ri.run_id = $1 AND i.id <> r.incident_id
+			AND i.alert_status = 'firing' AND i.parent_id IS NULL
+			AND NOT EXISTS (
+				SELECT 1 FROM run_incidents o JOIN runs orun ON orun.id = o.run_id
+				WHERE o.incident_id = i.id AND o.run_id <> $1 AND orun.status IN ('queued', 'running'))
+		ORDER BY i.id`, runID)
+	if err != nil {
+		return nil, err
+	}
+	return pgx.CollectRows(rows, pgx.RowTo[int64])
 }
 
 // RunningRun returns the run currently running, if any.

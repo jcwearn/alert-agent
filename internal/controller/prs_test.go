@@ -32,6 +32,9 @@ type prState struct {
 
 type fakeAction struct {
 	runID         int64
+	actor         string
+	incident      int64
+	target        int64
 	tool, status  string
 	input, result string
 	finished      bool
@@ -273,7 +276,7 @@ func TestProposePR(t *testing.T) {
 		t.Fatal(err)
 	}
 	tools, err := cs.ListTools(t.Context(), nil)
-	if err != nil || len(tools.Tools) != 1 || tools.Tools[0].Name != "propose_pr" {
+	if err != nil || len(tools.Tools) != 3 || !hasTool(tools.Tools, "propose_pr") {
 		t.Fatalf("tools: %+v %v", tools, err)
 	}
 

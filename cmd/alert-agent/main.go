@@ -81,6 +81,8 @@ func runController(ctx context.Context) error {
 		AgentEnabled: os.Getenv("AGENT_ENABLED") == "true",
 		PublicURL:    os.Getenv("PUBLIC_URL"),
 		MaxTurns:     envInt("RUN_MAX_TURNS", 40),
+		RunHold:      envDuration("RUN_HOLD", time.Minute),
+		RecentWindow: envDuration("RECENT_WINDOW", 30*time.Minute),
 	}
 
 	var notifier controller.Notifier

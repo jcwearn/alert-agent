@@ -87,11 +87,11 @@ func Run(ctx context.Context, cfg Config) error {
 		return api.fail(ctx, "checkout failed: "+err.Error())
 	}
 
-	settings, err := settingsJSON(rc.ProposePR)
+	settings, err := settingsJSON(rc.ProposePR, rc.Consolidate)
 	if err != nil {
 		return api.fail(ctx, err.Error())
 	}
-	mcpConfig, err := mcpConfigJSON(cfg.SelfBin, cfg.WorkDir, cfg.Getenv, cfg.ControllerURL, cfg.RunToken, rc.ProposePR)
+	mcpConfig, err := mcpConfigJSON(cfg.SelfBin, cfg.WorkDir, cfg.Getenv, cfg.ControllerURL, cfg.RunToken, rc.ProposePR || rc.Consolidate)
 	if err != nil {
 		return api.fail(ctx, err.Error())
 	}
