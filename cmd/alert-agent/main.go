@@ -16,17 +16,22 @@ import (
 	"time"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/client-go/discovery/cached/memory"
+	"k8s.io/client-go/dynamic"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
+	"k8s.io/client-go/restmapper"
+	"k8s.io/client-go/tools/clientcmd"
 
 	"github.com/jcwearn/alert-agent/internal/controller"
 	"github.com/jcwearn/alert-agent/internal/dispatch"
 	"github.com/jcwearn/alert-agent/internal/github"
+	"github.com/jcwearn/alert-agent/internal/mcptools"
 	"github.com/jcwearn/alert-agent/internal/runner"
 	"github.com/jcwearn/alert-agent/internal/store"
 )
 
-const usage = "usage: alert-agent <controller|migrate|runner>"
+const usage = "usage: alert-agent <controller|migrate|runner|mcp>"
 
 func main() {
 	os.Exit(run(os.Args[1:]))
@@ -49,6 +54,8 @@ func run(args []string) int {
 		err = runMigrate(ctx)
 	case "runner":
 		err = runRunner(ctx)
+	case "mcp":
+		err = runMCP(ctx)
 	default:
 		fmt.Fprintln(os.Stderr, usage)
 		return 2
@@ -163,6 +170,40 @@ func runnerImage(kube kubernetes.Interface, namespace string) (string, error) {
 		}
 	}
 	return "", errors.New("own pod has no controller container")
+}
+
+// runMCP serves the read-only tools on stdio. claude starts it inside the
+// runner pod; stdout is the protocol, so all logging goes to stderr.
+func runMCP(ctx context.Context) error {
+	slog.SetDefault(slog.New(slog.NewTextHandler(os.Stderr, nil)))
+	cfg, err := rest.InClusterConfig()
+	if errors.Is(err, rest.ErrNotInCluster) {
+		// Local development: the usual kubeconfig.
+		cfg, err = clientcmd.NewNonInteractiveDeferredLoadingClientConfig(
+			clientcmd.NewDefaultClientConfigLoadingRules(), nil).ClientConfig()
+	}
+	if err != nil {
+		return fmt.Errorf("kubernetes config: %w", err)
+	}
+	core, err := kubernetes.NewForConfig(cfg)
+	if err != nil {
+		return err
+	}
+	dyn, err := dynamic.NewForConfig(cfg)
+	if err != nil {
+		return err
+	}
+	cached := memory.NewMemCacheClient(core.Discovery())
+	mapper := restmapper.NewShortcutExpander(restmapper.NewDeferredDiscoveryRESTMapper(cached), cached, nil)
+
+	return mcptools.Run(ctx, &mcptools.Deps{
+		Dynamic:       dyn,
+		Mapper:        mapper,
+		Core:          core,
+		PrometheusURL: envOr("PROMETHEUS_URL", "http://kube-prometheus-stack-prometheus.prometheus.svc.cluster.local:9090"),
+		LokiURL:       envOr("LOKI_URL", "http://loki.loki.svc.cluster.local:3100"),
+		RepoDir:       envOr("REPO_DIR", "/work/repo"),
+	}, "alert-agent")
 }
 
 func runRunner(ctx context.Context) error {
