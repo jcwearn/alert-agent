@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"time"
 
@@ -33,13 +34,14 @@ func (c *client) finish(ctx context.Context, f runnerapi.Finish) error {
 	return c.do(ctx, http.MethodPost, runnerapi.PathFinish, f, nil)
 }
 
-// fail reports a failed run and returns the failure as an error for the
-// process exit code.
+// fail reports a failed run. It returns an error only if the report itself
+// could not be delivered; see Run for why.
 func (c *client) fail(ctx context.Context, msg string) error {
 	if err := c.finish(ctx, runnerapi.Finish{Status: "failed", Error: msg}); err != nil {
 		return fmt.Errorf("%s (and reporting it failed: %w)", msg, err)
 	}
-	return fmt.Errorf("%s", msg)
+	slog.Warn("run failed", "error", msg)
+	return nil
 }
 
 // do retries transient failures: the controller restarting mid-run should

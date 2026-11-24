@@ -1,6 +1,7 @@
 package runner
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -186,8 +187,9 @@ func TestRunSucceeds(t *testing.T) {
 
 func TestRunReportsClaudeFailure(t *testing.T) {
 	cfg, fc, _ := setup(t, `echo '{"type":"result","subtype":"error_max_turns","is_error":true,"result":"","num_turns":30}'`+"\n")
-	if err := Run(t.Context(), cfg); err == nil {
-		t.Fatal("expected an error")
+	// A reported failure is a clean exit: the Job must not fail and page.
+	if err := Run(t.Context(), cfg); err != nil {
+		t.Fatalf("reported failure should exit cleanly, got %v", err)
 	}
 	if fc.finish == nil || fc.finish.Status != "failed" || !strings.Contains(fc.finish.Error, "error_max_turns") {
 		t.Fatalf("finish = %+v", fc.finish)
@@ -196,8 +198,8 @@ func TestRunReportsClaudeFailure(t *testing.T) {
 
 func TestRunReportsCrashWithoutResult(t *testing.T) {
 	cfg, fc, _ := setup(t, "echo 'auth failed' >&2; exit 1\n")
-	if err := Run(t.Context(), cfg); err == nil {
-		t.Fatal("expected an error")
+	if err := Run(t.Context(), cfg); err != nil {
+		t.Fatalf("reported failure should exit cleanly, got %v", err)
 	}
 	if fc.finish == nil || fc.finish.Status != "failed" || !strings.Contains(fc.finish.Error, "auth failed") {
 		t.Fatalf("stderr should be in the failure: %+v", fc.finish)
@@ -278,4 +280,17 @@ func read(t *testing.T, dir, name string) string {
 		t.Fatal(err)
 	}
 	return string(b)
+}
+
+// When the controller cannot be reached to report, the runner must fail, so
+// the Job fails and the dispatcher (and the Job alerts) notice.
+func TestRunFailsWhenItCannotReport(t *testing.T) {
+	cfg, _, _ := setup(t, successStream)
+	cfg.ControllerURL = "http://127.0.0.1:1"
+	cfg.HTTP = &http.Client{Timeout: 200 * time.Millisecond}
+	ctx, cancel := context.WithTimeout(t.Context(), 3*time.Second)
+	defer cancel()
+	if err := Run(ctx, cfg); err == nil {
+		t.Fatal("expected an error when the controller is unreachable")
+	}
 }
