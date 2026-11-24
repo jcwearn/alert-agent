@@ -31,13 +31,19 @@ type Config struct {
 	WorkDir       string
 	ClaudeBin     string
 	GitBin        string
+	SelfBin       string // this binary, started by claude as the MCP tool server
 	Getenv        func(string) string
 	HTTP          *http.Client
 }
 
 // ConfigFromEnv reads the variables the dispatcher sets on the Job.
 func ConfigFromEnv() (Config, error) {
+	self, err := os.Executable()
+	if err != nil {
+		return Config{}, err
+	}
 	c := Config{
+		SelfBin:       self,
 		ControllerURL: os.Getenv("CONTROLLER_URL"),
 		RunToken:      os.Getenv("RUN_TOKEN"),
 		GitHubToken:   os.Getenv("GITHUB_TOKEN"),
@@ -73,8 +79,12 @@ func Run(ctx context.Context, cfg Config) error {
 	if err != nil {
 		return api.fail(ctx, err.Error())
 	}
+	mcpConfig, err := mcpConfigJSON(cfg.SelfBin, cfg.WorkDir, cfg.Getenv)
+	if err != nil {
+		return api.fail(ctx, err.Error())
+	}
 
-	cmd := exec.CommandContext(ctx, cfg.ClaudeBin, claudeArgs(rc, settings, userPrompt(rc))...)
+	cmd := exec.CommandContext(ctx, cfg.ClaudeBin, claudeArgs(rc, settings, mcpConfig, userPrompt(rc))...)
 	cmd.Dir = cfg.WorkDir
 	cmd.Env = claudeEnv(cfg.Getenv)
 	var stderr bytes.Buffer

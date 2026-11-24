@@ -97,7 +97,7 @@ func setup(t *testing.T, claudeBody string) (Config, *fakeController, string) {
 	}
 	cfg := Config{
 		ControllerURL: srv.URL, RunToken: "run-token", GitHubToken: "ghs_secret", Repo: "jcwearn/k3s-cluster",
-		WorkDir: filepath.Join(dir, "repo"), ClaudeBin: claudeBin, GitBin: gitBin,
+		WorkDir: filepath.Join(dir, "repo"), ClaudeBin: claudeBin, GitBin: gitBin, SelfBin: "/usr/local/bin/alert-agent",
 		Getenv: func(k string) string { return env[k] }, HTTP: srv.Client(),
 	}
 	return cfg, fc, dir
@@ -145,7 +145,7 @@ func TestRunSucceeds(t *testing.T) {
 			t.Errorf("claude's environment contains %q", secret)
 		}
 	}
-	for _, want := range []string{"CLAUDE_CODE_OAUTH_TOKEN=sk-ant-oat-test", "CLAUDE_CODE_SUBPROCESS_ENV_SCRUB=1", "DISABLE_AUTOUPDATER=1", "KUBERNETES_SERVICE_HOST=10.43.0.1"} {
+	for _, want := range []string{"CLAUDE_CODE_OAUTH_TOKEN=sk-ant-oat-test", "DISABLE_AUTOUPDATER=1", "KUBERNETES_SERVICE_HOST=10.43.0.1"} {
 		if !strings.Contains(claudeEnv, want) {
 			t.Errorf("claude's environment lacks %s", want)
 		}
@@ -155,9 +155,23 @@ func TestRunSucceeds(t *testing.T) {
 	}
 
 	args := read(t, dir, "claude.args")
-	for _, want := range []string{"--session-id\n11111111-2222-3333-4444-555555555555", "--permission-mode\ndontAsk", "--model\nopus", "--max-turns\n30", "--output-format\nstream-json"} {
+	for _, want := range []string{"--session-id\n11111111-2222-3333-4444-555555555555", "--permission-mode\ndontAsk", "--model\nopus", "--max-turns\n30", "--output-format\nstream-json", "--strict-mcp-config"} {
 		if !strings.Contains(args, want) {
 			t.Errorf("claude args lack %q", strings.ReplaceAll(want, "\n", " "))
+		}
+	}
+
+	// The tool server is this binary, started with the repo path and none of
+	// the runner's credentials.
+	mcpConfig := argAfter(t, args, "--mcp-config")
+	for _, want := range []string{`"command":"/usr/local/bin/alert-agent"`, `"args":["mcp"]`, `"REPO_DIR":"` + cfg.WorkDir + `"`} {
+		if !strings.Contains(mcpConfig, want) {
+			t.Errorf("mcp config lacks %s: %s", want, mcpConfig)
+		}
+	}
+	for _, secret := range []string{"run-token", "ghs_secret", "sk-ant-oat"} {
+		if strings.Contains(mcpConfig, secret) {
+			t.Errorf("mcp config carries %q", secret)
 		}
 	}
 
@@ -203,6 +217,18 @@ func TestUserPromptTreatsAlertAsData(t *testing.T) {
 	}
 }
 
+func argAfter(t *testing.T, args, flag string) string {
+	t.Helper()
+	lines := strings.Split(args, "\n")
+	for i, l := range lines {
+		if l == flag && i+1 < len(lines) {
+			return lines[i+1]
+		}
+	}
+	t.Fatalf("flag %s not passed", flag)
+	return ""
+}
+
 func TestSettingsDenyEditsAndWeb(t *testing.T) {
 	s, err := settingsJSON()
 	if err != nil {
@@ -218,14 +244,17 @@ func TestSettingsDenyEditsAndWeb(t *testing.T) {
 	if err := json.Unmarshal([]byte(s), &parsed); err != nil {
 		t.Fatal(err)
 	}
-	for _, want := range []string{"Edit", "Write", "WebFetch", "WebSearch"} {
+	for _, want := range []string{"Bash", "Edit", "Write", "WebFetch", "WebSearch"} {
 		if !contains(parsed.Permissions.Deny, want) {
 			t.Errorf("%s not denied", want)
 		}
 	}
 	for _, a := range parsed.Permissions.Allow {
-		if a == "Bash" || strings.HasPrefix(a, "Bash(curl -s *") || a == "Bash(*)" {
-			t.Errorf("allow rule %q is too broad", a)
+		if strings.HasPrefix(a, "Bash") {
+			t.Errorf("no shell may be allowed, got %q", a)
+		}
+		if (strings.HasPrefix(a, "Read") || strings.HasPrefix(a, "Grep") || strings.HasPrefix(a, "Glob")) && !strings.Contains(a, "(./**)") {
+			t.Errorf("file tool %q is not confined to the checkout", a)
 		}
 	}
 	if parsed.Permissions.DefaultMode != "dontAsk" {
