@@ -1,0 +1,149 @@
+package ui
+
+import (
+	"strconv"
+	"time"
+
+	"github.com/jcwearn/alert-agent/internal/store"
+)
+
+func runURL(id int64) templ.SafeURL {
+	return templ.SafeURL("/runs/" + strconv.FormatInt(id, 10))
+}
+
+func incidentURL(id int64) templ.SafeURL {
+	return templ.SafeURL("/incidents/" + strconv.FormatInt(id, 10))
+}
+
+func runDuration(r store.Run) string {
+	if r.DurationMS != nil {
+		return (time.Duration(*r.DurationMS) * time.Millisecond).Round(time.Second).String()
+	}
+	if r.StartedAt != nil && r.FinishedAt != nil {
+		return r.FinishedAt.Sub(*r.StartedAt).Round(time.Second).String()
+	}
+	return ""
+}
+
+templ runList(runs []store.Run) {
+	<h2>Agent runs ({ strconv.Itoa(len(runs)) })</h2>
+	if len(runs) == 0 {
+		<p class="muted">No agent runs for this incident.</p>
+	} else {
+		<div class="table-wrap">
+			<table>
+				<thead>
+					<tr>
+						<th>Run</th>
+						<th>Status</th>
+						<th class="hide-narrow">Model</th>
+						<th class="hide-narrow">Turns</th>
+						<th>Duration</th>
+					</tr>
+				</thead>
+				<tbody>
+					for _, r := range runs {
+						<tr>
+							<td><a href={ runURL(r.ID) }>#{ strconv.FormatInt(r.ID, 10) }</a></td>
+							<td>
+								@statusBadge(r.Status)
+							</td>
+							<td class="hide-narrow">{ r.Model }</td>
+							<td class="hide-narrow">
+								if r.NumTurns != nil {
+									{ strconv.Itoa(*r.NumTurns) }
+								}
+							</td>
+							<td>{ runDuration(r) }</td>
+						</tr>
+					}
+				</tbody>
+			</table>
+		</div>
+		for _, r := range runs {
+			if r.Status == store.RunSucceeded && r.Report != "" {
+				<h2>Latest report</h2>
+				<div class="card report">{ r.Report }</div>
+				break
+			}
+		}
+	}
+}
+
+// RunDetail is one run: its report, then the full transcript.
+templ RunDetail(in store.Incident, run store.Run, items []TranscriptItem) {
+	@layout("Run #" + strconv.FormatInt(run.ID, 10)) {
+		<h1>
+			@statusBadge(run.Status)
+			Run #{ strconv.FormatInt(run.ID, 10) }
+		</h1>
+		<div class="card">
+			<dl>
+				<dt>Incident</dt>
+				<dd><a href={ incidentURL(in.ID) }>#{ strconv.FormatInt(in.ID, 10) } { in.AlertName }</a> <span class="muted">{ in.Namespace }</span></dd>
+				<dt>Model</dt>
+				<dd>{ run.Model }</dd>
+				<dt>Session</dt>
+				<dd class="mono">{ run.SessionID }</dd>
+				<dt>Job</dt>
+				<dd class="mono">{ run.JobName }</dd>
+				<dt>Queued</dt>
+				<dd>{ stamp(run.CreatedAt) }</dd>
+				if run.StartedAt != nil {
+					<dt>Started</dt>
+					<dd>{ stamp(*run.StartedAt) }</dd>
+				}
+				if d := runDuration(run); d != "" {
+					<dt>Duration</dt>
+					<dd>{ d }</dd>
+				}
+				if run.NumTurns != nil {
+					<dt>Turns</dt>
+					<dd>{ strconv.Itoa(*run.NumTurns) }</dd>
+				}
+			</dl>
+		</div>
+		if run.Error != "" {
+			<h2>Error</h2>
+			<div class="card report error">{ run.Error }</div>
+		}
+		if run.Report != "" {
+			<h2>Report</h2>
+			<div class="card report">{ run.Report }</div>
+		}
+		<h2>Transcript ({ strconv.Itoa(len(items)) } steps)</h2>
+		if len(items) == 0 {
+			<p class="muted">No transcript recorded.</p>
+		}
+		for _, it := range items {
+			switch it.Kind {
+				case ItemText:
+					<div class="step step-text">{ it.Body }</div>
+				case ItemTool:
+					<div class="step step-tool">
+						<div class="mono">{ it.Title }</div>
+						if it.Body != "" {
+							<div class="muted step-note">{ it.Body }</div>
+						}
+					</div>
+				case ItemResult:
+					<details class={ "step", "step-result", templ.KV("error", it.IsError) }>
+						<summary>
+							if it.IsError {
+								error ·
+							}
+							output · { it.Title }
+						</summary>
+						<pre>{ it.Body }</pre>
+					</details>
+				default:
+					<div class="step step-meta muted">
+						{ it.Title }
+						if it.Body != "" {
+							<pre>{ it.Body }</pre>
+						}
+					</div>
+			}
+		}
+	}
+}

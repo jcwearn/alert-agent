@@ -53,7 +53,7 @@ templ IncidentList(incidents []store.Incident, now time.Time) {
 }
 
 // IncidentDetail is one incident and its alerts.
-templ IncidentDetail(in store.Incident, alerts []store.IncidentAlert) {
+templ IncidentDetail(in store.Incident, alerts []store.IncidentAlert, runs []store.Run) {
 	@layout(in.AlertName) {
 		<h1>
 			@statusBadge(in.AlertStatus)
@@ -79,6 +79,7 @@ templ IncidentDetail(in store.Incident, alerts []store.IncidentAlert) {
 				}
 			</dl>
 		</div>
+		@runList(runs)
 		<h2>Alerts ({ strconv.Itoa(len(alerts)) })</h2>
 		for _, a := range alerts {
 			<div class="card">

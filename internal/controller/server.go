@@ -1,6 +1,7 @@
 // Package controller is the long-running half of alert-agent: it receives
-// Alertmanager webhooks, records incidents, serves the UI and (in later
-// phases) hosts the MCP tools that are the agent's only write path.
+// Alertmanager webhooks, records incidents, queues agent runs, serves the
+// runner API and the UI, and (in later phases) hosts the MCP tools that are
+// the agent's only write path.
 package controller
 
 import (
@@ -10,6 +11,7 @@ import (
 	"log/slog"
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/a-h/templ"
@@ -26,22 +28,50 @@ type Store interface {
 	RecordWebhook(ctx context.Context, raw []byte, p alertmanager.Payload) (store.RecordResult, error)
 	ListIncidents(ctx context.Context, limit int) ([]store.Incident, error)
 	GetIncident(ctx context.Context, id int64) (store.Incident, []store.IncidentAlert, error)
+	EnqueueRun(ctx context.Context, incidentID int64) (int64, error)
+	RunByTokenHash(ctx context.Context, hash []byte) (store.Run, error)
+	AppendRunEvents(ctx context.Context, runID int64, events []store.RunEvent) error
+	FinishRun(ctx context.Context, runID int64, res store.RunResult) (bool, error)
+	GetRun(ctx context.Context, id int64) (store.Run, error)
+	ListRuns(ctx context.Context, incidentID int64) ([]store.Run, error)
+	RunEvents(ctx context.Context, runID int64) ([]store.RunEvent, error)
 }
+
+// Options configure the agent side of the controller.
+type Options struct {
+	// AgentEnabled queues a run for every new incident. Off, the controller
+	// still records incidents but never starts the agent.
+	AgentEnabled bool
+	// PublicURL is the UI's address, for links in notifications.
+	PublicURL string
+	// MaxTurns caps each run's agent loop.
+	MaxTurns int
+}
+
+// Waker is told when there may be work for the dispatcher.
+type Waker interface{ Wake() }
 
 // maxWebhookBody bounds one delivery. Alertmanager sends every alert in the
 // group, so a namespace-wide outage is the large case; this is generous.
 const maxWebhookBody = 4 << 20
 
-// Server holds the controller's two HTTP surfaces.
+// Server holds the controller's HTTP surfaces.
 type Server struct {
-	store   Store
-	metrics *metrics
-	now     func() time.Time
+	store    Store
+	opts     Options
+	metrics  *metrics
+	now      func() time.Time
+	waker    Waker
+	notifier Notifier
 }
 
-// New returns a Server backed by st.
-func New(st Store) *Server {
-	return &Server{store: st, metrics: newMetrics(), now: time.Now}
+// New returns a Server backed by st. waker and notifier may be nil.
+func New(st Store, opts Options, waker Waker, notifier Notifier) *Server {
+	return &Server{store: st, opts: opts, metrics: newMetrics(), now: time.Now, waker: waker, notifier: notifier}
+}
+
+func (s *Server) incidentURL(id int64) string {
+	return strings.TrimRight(s.opts.PublicURL, "/") + "/incidents/" + strconv.FormatInt(id, 10)
 }
 
 // UIHandler serves the UI, health checks and metrics. It is the port the
@@ -55,6 +85,7 @@ func (s *Server) UIHandler() http.Handler {
 	mux.Handle("GET /metrics", promhttp.HandlerFor(s.metrics.registry, promhttp.HandlerOpts{}))
 	mux.HandleFunc("GET /{$}", s.incidentList)
 	mux.HandleFunc("GET /incidents/{id}", s.incidentDetail)
+	mux.HandleFunc("GET /runs/{id}", s.runDetail)
 	return mux
 }
 
@@ -106,6 +137,9 @@ func (s *Server) alertmanagerWebhook(w http.ResponseWriter, r *http.Request) {
 	s.metrics.webhooks.WithLabelValues("ok").Inc()
 	if res.Created {
 		s.metrics.incidents.WithLabelValues("opened").Inc()
+		if p.Status == alertmanager.StatusFiring && s.opts.AgentEnabled {
+			s.enqueue(r.Context(), res.IncidentID)
+		}
 	}
 	if res.Resolved {
 		s.metrics.incidents.WithLabelValues("resolved").Inc()
@@ -114,6 +148,22 @@ func (s *Server) alertmanagerWebhook(w http.ResponseWriter, r *http.Request) {
 		"status", p.Status, "alertname", p.Label("alertname"), "namespace", p.Label("namespace"),
 		"alerts", len(p.Alerts), "incident", res.IncidentID, "created", res.Created, "resolved", res.Resolved)
 	w.WriteHeader(http.StatusNoContent)
+}
+
+// enqueue queues a diagnosis. A failure here is logged, not returned: the
+// incident is recorded, and Alertmanager retrying the delivery would only
+// fold into the same incident without queueing anything.
+func (s *Server) enqueue(ctx context.Context, incidentID int64) {
+	runID, err := s.store.EnqueueRun(ctx, incidentID)
+	if err != nil {
+		slog.Error("queueing run", "incident", incidentID, "err", err)
+		return
+	}
+	s.metrics.runs.WithLabelValues(store.RunQueued).Inc()
+	slog.Info("run queued", "run", runID, "incident", incidentID)
+	if s.waker != nil {
+		s.waker.Wake()
+	}
 }
 
 func (s *Server) incidentList(w http.ResponseWriter, r *http.Request) {
@@ -142,7 +192,44 @@ func (s *Server) incidentDetail(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "could not load incident", http.StatusInternalServerError)
 		return
 	}
-	render(w, r, ui.IncidentDetail(in, alerts))
+	runs, err := s.store.ListRuns(r.Context(), id)
+	if err != nil {
+		slog.Error("loading runs", "incident", id, "err", err)
+		http.Error(w, "could not load runs", http.StatusInternalServerError)
+		return
+	}
+	render(w, r, ui.IncidentDetail(in, alerts, runs))
+}
+
+func (s *Server) runDetail(w http.ResponseWriter, r *http.Request) {
+	id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
+	if err != nil {
+		http.NotFound(w, r)
+		return
+	}
+	run, err := s.store.GetRun(r.Context(), id)
+	if errors.Is(err, store.ErrNotFound) {
+		http.NotFound(w, r)
+		return
+	}
+	if err != nil {
+		slog.Error("loading run", "id", id, "err", err)
+		http.Error(w, "could not load run", http.StatusInternalServerError)
+		return
+	}
+	in, _, err := s.store.GetIncident(r.Context(), run.IncidentID)
+	if err != nil {
+		slog.Error("loading run incident", "id", id, "err", err)
+		http.Error(w, "could not load incident", http.StatusInternalServerError)
+		return
+	}
+	events, err := s.store.RunEvents(r.Context(), id)
+	if err != nil {
+		slog.Error("loading run events", "id", id, "err", err)
+		http.Error(w, "could not load transcript", http.StatusInternalServerError)
+		return
+	}
+	render(w, r, ui.RunDetail(in, run, ui.Transcript(events)))
 }
 
 func render(w http.ResponseWriter, r *http.Request, c templ.Component) {
@@ -152,12 +239,13 @@ func render(w http.ResponseWriter, r *http.Request, c templ.Component) {
 	}
 }
 
-// Run serves both handlers until ctx is cancelled, then drains in-flight
-// requests for up to ten seconds.
-func (s *Server) Run(ctx context.Context, uiAddr, webhookAddr string) error {
+// Run serves all three handlers until ctx is cancelled, then drains
+// in-flight requests for up to ten seconds.
+func (s *Server) Run(ctx context.Context, uiAddr, webhookAddr, runnerAddr string) error {
 	servers := []*http.Server{
 		{Addr: uiAddr, Handler: s.UIHandler(), ReadHeaderTimeout: 10 * time.Second},
 		{Addr: webhookAddr, Handler: s.WebhookHandler(), ReadHeaderTimeout: 10 * time.Second},
+		{Addr: runnerAddr, Handler: s.RunnerHandler(), ReadHeaderTimeout: 10 * time.Second},
 	}
 
 	errCh := make(chan error, len(servers))

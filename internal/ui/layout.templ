@@ -45,6 +45,20 @@ templ layout(title string) {
 				dt { color: var(--muted); }
 				dd { margin: 0; overflow-wrap: anywhere; }
 				.table-wrap { overflow-x: auto; }
+				.mono { font: 13px/1.5 ui-monospace, monospace; overflow-wrap: anywhere; }
+				.report { white-space: pre-wrap; overflow-wrap: anywhere; }
+				.report.error, details.error summary { color: var(--firing); }
+				.step { margin: 6px 0; padding: 8px 12px; border-left: 3px solid var(--line); background: var(--card); border-radius: 0 6px 6px 0; }
+				.step-text { white-space: pre-wrap; border-left-color: var(--fg); }
+				.step-tool { border-left-color: var(--muted); }
+				.step-note { font-size: 13px; }
+				.step-meta { font-size: 13px; }
+				.step pre { margin: 6px 0 0; white-space: pre-wrap; overflow-wrap: anywhere; font: 12px/1.5 ui-monospace, monospace; max-height: 480px; overflow-y: auto; }
+				summary { cursor: pointer; font-size: 13px; color: var(--muted); }
+				.status-queued, .status-running { color: var(--fg); background: var(--chip); }
+				.status-succeeded { color: var(--resolved); background: var(--resolved-bg); }
+				.status-failed { color: var(--firing); background: var(--firing-bg); }
+				.status-skipped { color: var(--muted); background: var(--chip); }
 				@media (max-width: 640px) { .hide-narrow { display: none; } }
 			</style>
 		</head>

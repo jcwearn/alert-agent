@@ -79,7 +79,7 @@ COPY --from=build /out/alert-agent /usr/local/bin/alert-agent
 ENV HOME=/home/nonroot \
     DISABLE_AUTOUPDATER=1
 
-EXPOSE 8080 8081
+EXPOSE 8080 8081 8082
 USER 65532:65532
 
 ENTRYPOINT ["/usr/local/bin/alert-agent"]
