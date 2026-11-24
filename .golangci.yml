@@ -1,0 +1,46 @@
+version: "2"
+
+# The shared go-ci.yaml runs `golangci-lint run` and nothing else, so this file
+# is the entire definition of what "lint" means here -- formatters included. In
+# v2 anything under `formatters:` is reported by the same run as an ordinary
+# issue tagged with the formatter that raised it, which is why there is no
+# separate format step in CI.
+
+linters:
+  default: standard
+  enable:
+    # The UI streams transcripts over SSE; a leaked body in those tests would
+    # look like a flake rather than a leak.
+    - bodyclose
+    - errorlint
+    - gocritic
+    - misspell
+    # Returning a nil error after checking a non-nil one would silently drop
+    # a failed action from the audit trail.
+    - nilerr
+    - revive
+    - unconvert
+    # Catches context.Background() and manual cleanup in tests where t.Context()
+    # and t.Cleanup exist.
+    - usetesting
+
+  settings:
+    gocritic:
+      enabled-tags:
+        - diagnostic
+        - style
+        - performance
+
+    revive:
+      rules:
+        - name: exported
+        - name: indent-error-flow
+        - name: unexported-return
+        - name: errorf
+        - name: context-as-argument
+        - name: unreachable-code
+
+formatters:
+  enable:
+    - gofmt
+    - goimports

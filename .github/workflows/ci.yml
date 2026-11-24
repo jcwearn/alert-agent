@@ -1,0 +1,15 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  ci:
+    permissions:
+      contents: read
+    # Renovate keeps this digest current and the comment naming its exact
+    # release. Never `# v1`: it fails zizmor's ref-version-mismatch audit.
+    uses: jcwearn/workflows/.github/workflows/go-ci.yaml@1eafd3170f8e2ea3dc23d443c3fcfb0aa502e8b3 # v1.8.14

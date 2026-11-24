@@ -1,0 +1,14 @@
+name: Build Image
+
+# Builds without pushing: with no `image` input the shared workflow skips the
+# registry login. Pushing is release.yml's job.
+
+on:
+  pull_request:
+    branches: [main]
+
+jobs:
+  build:
+    permissions:
+      contents: read
+    uses: jcwearn/workflows/.github/workflows/docker-build.yaml@1eafd3170f8e2ea3dc23d443c3fcfb0aa502e8b3 # v1.8.14

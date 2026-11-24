@@ -1,0 +1,22 @@
+name: Release
+
+# Tags, builds and pushes ghcr.io/jcwearn/alert-agent when a labelled PR
+# merges. Image tags carry no `v` prefix (the shared workflow's default);
+# k3s-cluster pins them as `alert-agent:X.Y.Z@sha256:...`.
+
+on:
+  pull_request:
+    types: [closed]
+    branches: [main]
+
+jobs:
+  release:
+    if: github.event.pull_request.merged == true
+    # Both scopes are validated statically before any `if:` runs, so
+    # packages: write must be granted even when the build is skipped.
+    permissions:
+      contents: write # git tag + GitHub Release
+      packages: write # push to GHCR
+    uses: jcwearn/workflows/.github/workflows/release.yaml@1eafd3170f8e2ea3dc23d443c3fcfb0aa502e8b3 # v1.8.14
+    with:
+      image: ghcr.io/jcwearn/alert-agent

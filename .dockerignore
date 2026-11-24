@@ -1,0 +1,9 @@
+# Deny everything, then allow what the build actually reads.
+*
+
+!cmd/
+!internal/
+!go.mod
+!go.sum
+
+**/*_test.go
