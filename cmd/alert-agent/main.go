@@ -15,6 +15,7 @@ import (
 	"syscall"
 	"time"
 
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
 
@@ -117,12 +118,14 @@ func newDispatcher(st *store.Store, onFinish func(int64)) (*dispatch.Dispatcher,
 		return nil, errors.New("GITHUB_APP_ID and GITHUB_INSTALLATION_ID must be set")
 	}
 
-	image := os.Getenv("RUNNER_IMAGE")
-	if image == "" {
-		return nil, errors.New("RUNNER_IMAGE must be set")
+	namespace := envOr("POD_NAMESPACE", "alert-agent")
+	image, err := runnerImage(kube, namespace)
+	if err != nil {
+		return nil, err
 	}
+	slog.Info("runner image", "image", image)
 	return dispatch.New(dispatch.Config{
-		Namespace:      envOr("POD_NAMESPACE", "alert-agent"),
+		Namespace:      namespace,
 		Image:          image,
 		ServiceAccount: envOr("RUNNER_SERVICE_ACCOUNT", "alert-agent-runner"),
 		ClaudeSecret:   envOr("CLAUDE_SECRET", "alert-agent-claude"),
@@ -134,6 +137,32 @@ func newDispatcher(st *store.Store, onFinish func(int64)) (*dispatch.Dispatcher,
 		MaxRunsPerHour: envInt("RUN_MAX_PER_HOUR", 6),
 		Interval:       10 * time.Second,
 	}, st, kube, app, onFinish), nil
+}
+
+// runnerImage is the image runner Jobs use: RUNNER_IMAGE if set, otherwise
+// this pod's own controller image. Reading it from the pod means a Renovate
+// bump of the Deployment's image moves the runners too, with no second pin to
+// forget.
+func runnerImage(kube kubernetes.Interface, namespace string) (string, error) {
+	if img := os.Getenv("RUNNER_IMAGE"); img != "" {
+		return img, nil
+	}
+	podName := os.Getenv("POD_NAME")
+	if podName == "" {
+		return "", errors.New("set RUNNER_IMAGE, or POD_NAME so the controller can use its own image")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	pod, err := kube.CoreV1().Pods(namespace).Get(ctx, podName, metav1.GetOptions{})
+	if err != nil {
+		return "", fmt.Errorf("read own pod for runner image: %w", err)
+	}
+	for _, c := range pod.Spec.Containers {
+		if c.Name == envOr("CONTROLLER_CONTAINER", "controller") {
+			return c.Image, nil
+		}
+	}
+	return "", errors.New("own pod has no controller container")
 }
 
 func runRunner(ctx context.Context) error {
