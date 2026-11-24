@@ -1,0 +1,10 @@
+name: Require Release Label
+
+on:
+  pull_request:
+    types: [opened, reopened, edited, labeled, unlabeled, synchronize]
+    branches: [main]
+
+jobs:
+  check:
+    uses: jcwearn/workflows/.github/workflows/require-release-label.yaml@1eafd3170f8e2ea3dc23d443c3fcfb0aa502e8b3 # v1.8.14
