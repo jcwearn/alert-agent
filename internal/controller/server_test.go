@@ -1,37 +1,198 @@
 package controller
 
 import (
+	"context"
+	"errors"
+	"io"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
+	"time"
+
+	"github.com/jcwearn/alert-agent/internal/alertmanager"
+	"github.com/jcwearn/alert-agent/internal/store"
 )
 
-func TestHealthz(t *testing.T) {
-	srv := httptest.NewServer(NewHandler())
-	t.Cleanup(srv.Close)
+type fakeStore struct {
+	pingErr   error
+	recordErr error
+	result    store.RecordResult
+	recorded  []alertmanager.Payload
+	incidents []store.Incident
+	alerts    []store.IncidentAlert
+}
 
-	resp, err := http.Get(srv.URL + "/healthz")
+func (f *fakeStore) Ping(context.Context) error { return f.pingErr }
+
+func (f *fakeStore) RecordWebhook(_ context.Context, _ []byte, p alertmanager.Payload) (store.RecordResult, error) {
+	f.recorded = append(f.recorded, p)
+	return f.result, f.recordErr
+}
+
+func (f *fakeStore) ListIncidents(context.Context, int) ([]store.Incident, error) {
+	return f.incidents, nil
+}
+
+func (f *fakeStore) GetIncident(_ context.Context, id int64) (store.Incident, []store.IncidentAlert, error) {
+	for _, in := range f.incidents {
+		if in.ID == id {
+			return in, f.alerts, nil
+		}
+	}
+	return store.Incident{}, nil, store.ErrNotFound
+}
+
+const validPayload = `{"version":"4","groupKey":"g1","status":"firing",
+  "groupLabels":{"alertname":"KubePodCrashLooping","namespace":"ebooks"},
+  "alerts":[{"status":"firing","fingerprint":"f1","labels":{"pod":"a"},"startsAt":"2026-11-24T10:00:00Z"}]}`
+
+// do makes one request and returns the status and body, with the body read
+// and closed.
+func do(t *testing.T, h http.Handler, method, path, body string) (status int, respBody string) {
+	t.Helper()
+	srv := httptest.NewServer(h)
+	t.Cleanup(srv.Close)
+	req, err := http.NewRequestWithContext(t.Context(), method, srv.URL+path, strings.NewReader(body))
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { _ = resp.Body.Close() })
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+	b, err := io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return resp.StatusCode, string(b)
+}
 
-	if resp.StatusCode != http.StatusOK {
-		t.Fatalf("status = %d, want 200", resp.StatusCode)
+func counter(t *testing.T, s *Server, name, label string) float64 {
+	t.Helper()
+	families, err := s.metrics.registry.Gather()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, f := range families {
+		if f.GetName() != name {
+			continue
+		}
+		for _, m := range f.GetMetric() {
+			for _, l := range m.GetLabel() {
+				if l.GetValue() == label {
+					return m.GetCounter().GetValue()
+				}
+			}
+		}
+	}
+	t.Fatalf("no series %s{%s}", name, label)
+	return 0
+}
+
+func TestWebhookRecords(t *testing.T) {
+	fs := &fakeStore{result: store.RecordResult{IncidentID: 7, Created: true}}
+	s := New(fs)
+
+	status, _ := do(t, s.WebhookHandler(), http.MethodPost, "/webhook/alertmanager", validPayload)
+	if status != http.StatusNoContent {
+		t.Fatalf("status = %d", status)
+	}
+	if len(fs.recorded) != 1 || fs.recorded[0].GroupKey != "g1" {
+		t.Fatalf("payload not passed to store: %+v", fs.recorded)
+	}
+	if got := counter(t, s, "alert_agent_incidents_total", "opened"); got != 1 {
+		t.Errorf("opened counter = %v", got)
+	}
+	if got := counter(t, s, "alert_agent_webhooks_total", "ok"); got != 1 {
+		t.Errorf("ok counter = %v", got)
 	}
 }
 
-func TestUnknownPathIs404(t *testing.T) {
-	srv := httptest.NewServer(NewHandler())
-	t.Cleanup(srv.Close)
+func TestWebhookRejectsBadPayload(t *testing.T) {
+	fs := &fakeStore{}
+	s := New(fs)
 
-	resp, err := http.Get(srv.URL + "/nope")
-	if err != nil {
-		t.Fatal(err)
+	status, _ := do(t, s.WebhookHandler(), http.MethodPost, "/webhook/alertmanager", `{"version":"3"}`)
+	if status != http.StatusBadRequest {
+		t.Fatalf("status = %d", status)
 	}
-	t.Cleanup(func() { _ = resp.Body.Close() })
+	if len(fs.recorded) != 0 {
+		t.Error("bad payload reached the store")
+	}
+	if got := counter(t, s, "alert_agent_webhooks_total", "bad_request"); got != 1 {
+		t.Errorf("bad_request counter = %v", got)
+	}
+}
 
-	if resp.StatusCode != http.StatusNotFound {
-		t.Fatalf("status = %d, want 404", resp.StatusCode)
+// A store failure must be a 5xx, so Alertmanager retries the delivery.
+func TestWebhookStoreErrorIs5xx(t *testing.T) {
+	s := New(&fakeStore{recordErr: errors.New("db down")})
+
+	status, _ := do(t, s.WebhookHandler(), http.MethodPost, "/webhook/alertmanager", validPayload)
+	if status != http.StatusInternalServerError {
+		t.Fatalf("status = %d", status)
+	}
+}
+
+func TestWebhookNotOnUIPort(t *testing.T) {
+	s := New(&fakeStore{})
+	if status, _ := do(t, s.UIHandler(), http.MethodPost, "/webhook/alertmanager", validPayload); status == http.StatusNoContent {
+		t.Fatal("webhook must only be served on the webhook port")
+	}
+}
+
+func TestReadyzFollowsDatabase(t *testing.T) {
+	fs := &fakeStore{}
+	s := New(fs)
+	if status, _ := do(t, s.UIHandler(), http.MethodGet, "/readyz", ""); status != http.StatusOK {
+		t.Fatal("not ready")
+	}
+	fs.pingErr = errors.New("down")
+	if status, _ := do(t, s.UIHandler(), http.MethodGet, "/readyz", ""); status != http.StatusServiceUnavailable {
+		t.Fatal("still ready")
+	}
+	// Liveness ignores the database.
+	if status, _ := do(t, s.UIHandler(), http.MethodGet, "/healthz", ""); status != http.StatusOK {
+		t.Fatal("healthz failed")
+	}
+}
+
+func TestIncidentPages(t *testing.T) {
+	opened := time.Date(2026, 11, 24, 10, 0, 0, 0, time.UTC)
+	fs := &fakeStore{
+		incidents: []store.Incident{{
+			ID: 42, AlertName: "KubePodCrashLooping", Namespace: "ebooks", Severity: "warning",
+			Summary: "Pod <b>a</b> is crash looping", AlertStatus: "firing", OpenedAt: opened, UpdatedAt: opened, AlertCount: 1,
+		}},
+		alerts: []store.IncidentAlert{{
+			Fingerprint: "f1", Status: "firing", Labels: map[string]string{"pod": "a"},
+			Annotations: map[string]string{"description": "restarting"}, StartsAt: opened,
+			GeneratorURL: "javascript:alert(1)",
+		}},
+	}
+	s := New(fs)
+	s.now = func() time.Time { return opened.Add(90 * time.Minute) }
+
+	_, body := do(t, s.UIHandler(), http.MethodGet, "/", "")
+	for _, want := range []string{`href="/incidents/42"`, "KubePodCrashLooping", "1h ago", "Pod &lt;b&gt;a&lt;/b&gt;"} {
+		if !strings.Contains(body, want) {
+			t.Errorf("list page missing %q", want)
+		}
+	}
+
+	status, body := do(t, s.UIHandler(), http.MethodGet, "/incidents/42", "")
+	if status != http.StatusOK || !strings.Contains(body, "pod=a") || !strings.Contains(body, "restarting") {
+		t.Errorf("detail page wrong (status %d)", status)
+	}
+	if strings.Contains(body, "javascript:") {
+		t.Error("unsafe generator URL rendered as a link")
+	}
+
+	for _, path := range []string{"/incidents/9", "/incidents/abc"} {
+		if status, _ := do(t, s.UIHandler(), http.MethodGet, path, ""); status != http.StatusNotFound {
+			t.Errorf("%s status = %d, want 404", path, status)
+		}
 	}
 }
