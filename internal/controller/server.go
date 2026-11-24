@@ -29,7 +29,9 @@ type Store interface {
 	RecordWebhook(ctx context.Context, raw []byte, p alertmanager.Payload) (store.RecordResult, error)
 	ListIncidents(ctx context.Context, limit int) ([]store.Incident, error)
 	GetIncident(ctx context.Context, id int64) (store.Incident, []store.IncidentAlert, error)
-	EnqueueRun(ctx context.Context, incidentID int64) (int64, error)
+	EnqueueRun(ctx context.Context, incidentID int64, hold time.Duration) (int64, bool, error)
+	RunIncidents(ctx context.Context, runID int64) ([]int64, error)
+	LeftoverIncidents(ctx context.Context, runID int64) ([]int64, error)
 	RunByTokenHash(ctx context.Context, hash []byte) (store.Run, error)
 	AppendRunEvents(ctx context.Context, runID int64, events []store.RunEvent) error
 	FinishRun(ctx context.Context, runID int64, res store.RunResult) (bool, error)
@@ -46,6 +48,16 @@ type Store interface {
 	UpdatePullRequest(ctx context.Context, id int64, st store.PRStatus) error
 	MarkPullRequestNotified(ctx context.Context, id int64) (bool, error)
 	SaveRunSession(ctx context.Context, runID int64, gz []byte, size int) error
+
+	RecordAction(ctx context.Context, a store.ActionStart) (int64, error)
+	IncidentActions(ctx context.Context, incidentID int64) ([]store.Action, error)
+	MergeIncident(ctx context.Context, childID, intoID int64, mergedBy, reason string) (int64, error)
+	UnmergeIncident(ctx context.Context, id int64) (int64, error)
+	LinkIncidents(ctx context.Context, x, y int64, reason, actor string, runID int64) (bool, error)
+	UnlinkIncidents(ctx context.Context, x, y int64) (bool, error)
+	IncidentLinks(ctx context.Context, id int64) ([]store.Link, error)
+	IncidentChildren(ctx context.Context, id int64) ([]store.Incident, error)
+	RecentIncidents(ctx context.Context, since time.Time, limit int) ([]store.RecentIncident, error)
 }
 
 // Options configure the agent side of the controller.
@@ -57,6 +69,12 @@ type Options struct {
 	PublicURL string
 	// MaxTurns caps each run's agent loop.
 	MaxTurns int
+	// RunHold is how long a new incident's run waits before it can start;
+	// incidents opening in the same namespace meanwhile join that run.
+	RunHold time.Duration
+	// RecentWindow is how far back a run's context lists other incidents,
+	// and how old a resolved incident may be to take a merge.
+	RecentWindow time.Duration
 }
 
 // Waker is told when there may be work for the dispatcher.
@@ -105,7 +123,13 @@ func (s *Server) UIHandler() http.Handler {
 	mux.HandleFunc("GET /{$}", s.incidentList)
 	mux.HandleFunc("GET /incidents/{id}", s.incidentDetail)
 	mux.HandleFunc("GET /runs/{id}", s.runDetail)
-	return mux
+	mux.HandleFunc("POST /incidents/{id}/merge", s.uiMerge)
+	mux.HandleFunc("POST /incidents/{id}/unmerge", s.uiUnmerge)
+	mux.HandleFunc("POST /incidents/{id}/link", s.uiLink)
+	mux.HandleFunc("POST /incidents/{id}/unlink", s.uiUnlink)
+	// The UI has no login (it is tailnet-only), so a form post from another
+	// site in the same browser must not be able to merge incidents.
+	return http.NewCrossOriginProtection().Handler(mux)
 }
 
 // WebhookHandler serves the Alertmanager receiver. It is a separate port so
@@ -157,7 +181,7 @@ func (s *Server) alertmanagerWebhook(w http.ResponseWriter, r *http.Request) {
 	if res.Created {
 		s.metrics.incidents.WithLabelValues("opened").Inc()
 		if p.Status == alertmanager.StatusFiring && s.opts.AgentEnabled {
-			s.enqueue(r.Context(), res.IncidentID)
+			s.enqueue(r.Context(), res.IncidentID, s.opts.RunHold)
 		}
 	}
 	if res.Resolved {
@@ -169,19 +193,27 @@ func (s *Server) alertmanagerWebhook(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
-// enqueue queues a diagnosis. A failure here is logged, not returned: the
-// incident is recorded, and Alertmanager retrying the delivery would only
-// fold into the same incident without queueing anything.
-func (s *Server) enqueue(ctx context.Context, incidentID int64) {
-	runID, err := s.store.EnqueueRun(ctx, incidentID)
+// enqueue queues a diagnosis, held for hold so a burst in one namespace
+// becomes one run. A failure here is logged, not returned: the incident is
+// recorded, and Alertmanager retrying the delivery would only fold into the
+// same incident without queueing anything.
+func (s *Server) enqueue(ctx context.Context, incidentID int64, hold time.Duration) {
+	runID, batched, err := s.store.EnqueueRun(ctx, incidentID, hold)
 	if err != nil {
 		slog.Error("queueing run", "incident", incidentID, "err", err)
 		return
 	}
+	if batched {
+		slog.Info("incident joined a held run", "run", runID, "incident", incidentID)
+		return
+	}
 	s.metrics.runs.WithLabelValues(store.RunQueued).Inc()
-	slog.Info("run queued", "run", runID, "incident", incidentID)
+	slog.Info("run queued", "run", runID, "incident", incidentID, "hold", hold)
 	if s.waker != nil {
 		s.waker.Wake()
+		if hold > 0 {
+			time.AfterFunc(hold+time.Second, s.waker.Wake)
+		}
 	}
 }
 
@@ -198,7 +230,7 @@ func (s *Server) incidentList(w http.ResponseWriter, r *http.Request) {
 			slog.Error("listing open PRs", "err", err)
 		}
 	}
-	render(w, r, ui.IncidentList(incidents, awaiting, s.now()))
+	render(w, r, ui.IncidentList(ui.GroupIncidents(incidents), awaiting, s.now()))
 }
 
 func (s *Server) incidentDetail(w http.ResponseWriter, r *http.Request) {
@@ -207,7 +239,8 @@ func (s *Server) incidentDetail(w http.ResponseWriter, r *http.Request) {
 		http.NotFound(w, r)
 		return
 	}
-	in, alerts, err := s.store.GetIncident(r.Context(), id)
+	ctx := r.Context()
+	in, alerts, err := s.store.GetIncident(ctx, id)
 	if errors.Is(err, store.ErrNotFound) {
 		http.NotFound(w, r)
 		return
@@ -217,19 +250,41 @@ func (s *Server) incidentDetail(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "could not load incident", http.StatusInternalServerError)
 		return
 	}
-	runs, err := s.store.ListRuns(r.Context(), id)
-	if err != nil {
+	page := ui.IncidentPage{
+		Incident: in, Alerts: alerts,
+		Notice: r.URL.Query().Get("msg"), Problem: r.URL.Query().Get("error"),
+	}
+	if page.Runs, err = s.store.ListRuns(ctx, id); err != nil {
 		slog.Error("loading runs", "incident", id, "err", err)
 		http.Error(w, "could not load runs", http.StatusInternalServerError)
 		return
 	}
-	var pr *store.PullRequest
-	if p, err := s.store.PullRequestForIncident(r.Context(), id); err == nil {
-		pr = &p
+	if p, err := s.store.PullRequestForIncident(ctx, id); err == nil {
+		page.PR = &p
 	} else if !errors.Is(err, store.ErrNotFound) {
 		slog.Error("loading PR", "incident", id, "err", err)
 	}
-	render(w, r, ui.IncidentDetail(in, alerts, runs, pr))
+	if in.ParentID != nil {
+		if parent, _, err := s.store.GetIncident(ctx, *in.ParentID); err == nil {
+			page.Parent = &parent
+		}
+	}
+	// The rest decorates the page; a failure is logged and the page still renders.
+	if page.Children, err = s.store.IncidentChildren(ctx, id); err != nil {
+		slog.Error("loading merged incidents", "incident", id, "err", err)
+	}
+	if page.Links, err = s.store.IncidentLinks(ctx, id); err != nil {
+		slog.Error("loading links", "incident", id, "err", err)
+	}
+	if page.Actions, err = s.store.IncidentActions(ctx, id); err != nil {
+		slog.Error("loading audit trail", "incident", id, "err", err)
+	}
+	if recent, err := s.store.ListIncidents(ctx, 200); err == nil {
+		page.Candidates = ui.MergeCandidates(in, recent, s.now())
+	} else {
+		slog.Error("loading merge candidates", "incident", id, "err", err)
+	}
+	render(w, r, ui.IncidentDetail(page))
 }
 
 func (s *Server) runDetail(w http.ResponseWriter, r *http.Request) {
@@ -260,7 +315,11 @@ func (s *Server) runDetail(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "could not load transcript", http.StatusInternalServerError)
 		return
 	}
-	render(w, r, ui.RunDetail(in, run, ui.Transcript(events)))
+	covers, err := s.store.RunIncidents(r.Context(), id)
+	if err != nil {
+		slog.Error("loading run incidents", "id", id, "err", err)
+	}
+	render(w, r, ui.RunDetail(in, run, covers, ui.Transcript(events)))
 }
 
 func render(w http.ResponseWriter, r *http.Request, c templ.Component) {

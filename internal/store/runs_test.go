@@ -19,7 +19,7 @@ func TestRunLifecycle(t *testing.T) {
 	ctx := t.Context()
 	incident := firingIncident(t, s)
 
-	runID, err := s.EnqueueRun(ctx, incident)
+	runID, _, err := s.EnqueueRun(ctx, incident, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -82,7 +82,7 @@ func TestOnlyOneRunAtATime(t *testing.T) {
 	ctx := t.Context()
 	incident := firingIncident(t, s)
 	for range 2 {
-		if _, err := s.EnqueueRun(ctx, incident); err != nil {
+		if _, _, err := s.EnqueueRun(ctx, incident, 0); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -104,7 +104,7 @@ func TestResolvedIncidentRunIsSkipped(t *testing.T) {
 	s := openTestStore(t)
 	ctx := t.Context()
 	incident := firingIncident(t, s)
-	runID, err := s.EnqueueRun(ctx, incident)
+	runID, _, err := s.EnqueueRun(ctx, incident, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -123,7 +123,7 @@ func TestRunsStartedSince(t *testing.T) {
 	s := openTestStore(t)
 	ctx := t.Context()
 	incident := firingIncident(t, s)
-	if _, err := s.EnqueueRun(ctx, incident); err != nil {
+	if _, _, err := s.EnqueueRun(ctx, incident, 0); err != nil {
 		t.Fatal(err)
 	}
 	if _, _, err := s.ClaimNextRun(ctx, []byte("h"), "j-", "m"); err != nil {

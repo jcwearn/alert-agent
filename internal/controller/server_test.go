@@ -23,6 +23,11 @@ type fakeStore struct {
 	alerts    []store.IncidentAlert
 
 	enqueued  []int64
+	holds     []time.Duration
+	batchRun  int64 // when set, EnqueueRun with a hold joins this run
+	members   map[int64][]int64
+	leftover  map[int64][]int64
+	links     map[[2]int64]string
 	runs      map[int64]store.Run
 	tokenHash map[string]int64
 	events    map[int64][]store.RunEvent
@@ -31,9 +36,13 @@ type fakeStore struct {
 	prState *prState
 }
 
-func (f *fakeStore) EnqueueRun(_ context.Context, incidentID int64) (int64, error) {
+func (f *fakeStore) EnqueueRun(_ context.Context, incidentID int64, hold time.Duration) (runID int64, batched bool, err error) {
 	f.enqueued = append(f.enqueued, incidentID)
-	return int64(len(f.enqueued)), nil
+	f.holds = append(f.holds, hold)
+	if hold > 0 && f.batchRun != 0 {
+		return f.batchRun, true, nil
+	}
+	return int64(len(f.enqueued)), false, nil
 }
 
 func (f *fakeStore) RunByTokenHash(_ context.Context, hash []byte) (store.Run, error) {

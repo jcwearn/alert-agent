@@ -74,6 +74,21 @@ templ layout(title string) {
 				.status-merged, .status-success { color: var(--resolved); background: var(--resolved-bg); }
 				.status-closed { color: var(--muted); background: var(--chip); }
 				.status-failure { color: var(--firing); background: var(--firing-bg); }
+				.status-started, .status-rejected { color: var(--muted); background: var(--chip); }
+				tr.child td { background: var(--bg); }
+				tr.child td:first-child { padding-left: 22px; }
+				a.chip { text-decoration: none; margin-left: 4px; }
+				.notice.error, .merged { border-color: var(--firing); }
+				.merged p { margin: 0 0 6px; }
+				ul.plain { list-style: none; padding: 0; margin: 4px 0 10px; }
+				ul.plain li { margin: 4px 0; }
+				form.inline { display: inline; margin-left: 6px; }
+				.forms { display: grid; gap: 12px; margin-top: 8px; border-top: 1px solid var(--line); padding-top: 10px; }
+				.forms label { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+				.forms input[type=text] { width: 100%; margin: 6px 0; }
+				select, input, button { font: inherit; color: var(--fg); background: var(--card); border: 1px solid var(--line); border-radius: 6px; padding: 4px 8px; max-width: 100%; }
+				button { cursor: pointer; }
+				.hint { font-size: 13px; }
 				@media (max-width: 640px) { .hide-narrow { display: none; } }
 			</style>
 		</head>

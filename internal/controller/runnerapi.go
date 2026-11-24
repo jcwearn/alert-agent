@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/jcwearn/alert-agent/internal/dispatch"
 	"github.com/jcwearn/alert-agent/internal/runnerapi"
@@ -56,30 +57,153 @@ func runFrom(r *http.Request) store.Run { return r.Context().Value(runKey{}).(st
 
 func (s *Server) runnerContext(w http.ResponseWriter, r *http.Request) {
 	run := runFrom(r)
-	in, alerts, err := s.store.GetIncident(r.Context(), run.IncidentID)
+	rc, err := s.buildContext(r.Context(), run)
 	if err != nil {
 		slog.Error("runner context", "run", run.ID, "err", err)
 		http.Error(w, "could not load incident", http.StatusInternalServerError)
 		return
 	}
-	rc := runnerapi.Context{
-		RunID:     run.ID,
-		SessionID: run.SessionID,
-		Model:     run.Model,
-		MaxTurns:  s.opts.MaxTurns,
-		UIURL:     s.incidentURL(in.ID),
-		ProposePR: s.prs != nil,
-		Incident: runnerapi.Incident{
-			ID: in.ID, AlertName: in.AlertName, Namespace: in.Namespace, Severity: in.Severity,
-			Summary: in.Summary, AlertStatus: in.AlertStatus, OpenedAt: in.OpenedAt,
-		},
+	writeJSON(w, rc)
+}
+
+// maxRecent bounds how many other incidents a run's context lists.
+const maxRecent = 25
+
+func (s *Server) buildContext(ctx context.Context, run store.Run) (runnerapi.Context, error) {
+	in, alerts, err := s.store.GetIncident(ctx, run.IncidentID)
+	if err != nil {
+		return runnerapi.Context{}, err
 	}
+	rc := runnerapi.Context{
+		RunID:       run.ID,
+		SessionID:   run.SessionID,
+		Model:       run.Model,
+		MaxTurns:    s.opts.MaxTurns,
+		UIURL:       s.incidentURL(in.ID),
+		ProposePR:   s.prs != nil,
+		Consolidate: true,
+		Incident:    apiIncident(in),
+		Alerts:      apiAlerts(alerts),
+	}
+
+	members, err := s.store.RunIncidents(ctx, run.ID)
+	if err != nil {
+		return rc, err
+	}
+	own := map[int64]bool{in.ID: true}
+	for _, id := range members {
+		if own[id] {
+			continue
+		}
+		own[id] = true
+		m, malerts, err := s.store.GetIncident(ctx, id)
+		if err != nil {
+			return rc, err
+		}
+		if m.Merged() || m.AlertStatus != "firing" {
+			continue
+		}
+		rc.Batch = append(rc.Batch, runnerapi.BatchIncident{Incident: apiIncident(m), Alerts: apiAlerts(malerts)})
+	}
+
+	recent, err := s.store.RecentIncidents(ctx, s.now().Add(-s.opts.RecentWindow), maxRecent+len(own))
+	if err != nil {
+		return rc, err
+	}
+	for _, ri := range recent {
+		if own[ri.ID] || len(rc.Recent) >= maxRecent {
+			continue
+		}
+		rc.Recent = append(rc.Recent, runnerapi.RecentIncident{
+			ID: ri.ID, AlertName: ri.AlertName, Namespace: ri.Namespace, AlertStatus: ri.AlertStatus,
+			OpenedAt: ri.OpenedAt, ParentID: ri.ParentID, Objects: identifyingLabels(ri.Labels),
+			Summary: reportSummary(ri.Report), PRNumber: ri.PRNumber,
+		})
+	}
+
+	if s.prs != nil {
+		open, err := s.store.OpenPullRequests(ctx)
+		if err != nil {
+			return rc, err
+		}
+		for _, pr := range open {
+			rc.OpenPRs = append(rc.OpenPRs, runnerapi.OpenPR{
+				Number: pr.Number, Title: pr.Title, IncidentID: pr.IncidentID, Files: pr.Files,
+			})
+		}
+	}
+	return rc, nil
+}
+
+func apiIncident(in store.Incident) runnerapi.Incident {
+	return runnerapi.Incident{
+		ID: in.ID, AlertName: in.AlertName, Namespace: in.Namespace, Severity: in.Severity,
+		Summary: in.Summary, AlertStatus: in.AlertStatus, OpenedAt: in.OpenedAt,
+	}
+}
+
+func apiAlerts(alerts []store.IncidentAlert) []runnerapi.Alert {
+	out := make([]runnerapi.Alert, 0, len(alerts))
 	for _, a := range alerts {
-		rc.Alerts = append(rc.Alerts, runnerapi.Alert{
+		out = append(out, runnerapi.Alert{
 			Status: a.Status, Labels: a.Labels, Annotations: a.Annotations, StartsAt: a.StartsAt,
 		})
 	}
-	writeJSON(w, rc)
+	return out
+}
+
+// objectLabels name the thing an alert is about; two incidents sharing one
+// are candidates for the same problem.
+var objectLabels = []string{
+	"pod", "container", "deployment", "statefulset", "daemonset", "replicaset", "job_name", "job", "cronjob",
+	"persistentvolumeclaim", "node", "instance", "service", "certificate", "name",
+}
+
+// identifyingLabels returns the distinct object labels across alerts, as
+// key=value, in a stable order.
+func identifyingLabels(alerts []map[string]string) []string {
+	seen := map[string]bool{}
+	var out []string
+	for _, key := range objectLabels {
+		for _, labels := range alerts {
+			if v := labels[key]; v != "" && !seen[key+"="+v] {
+				seen[key+"="+v] = true
+				out = append(out, key+"="+v)
+			}
+		}
+	}
+	if len(out) > 12 {
+		out = append(out[:12], "...")
+	}
+	return out
+}
+
+// maxSummary bounds the diagnosis summary each recent incident carries.
+const maxSummary = 500
+
+// reportSummary is the Summary (or Merged) section of a run report, which is
+// all another run needs to recognise the problem.
+func reportSummary(report string) string {
+	for _, h := range []string{"## Summary", "## Merged"} {
+		i := strings.Index(report, h)
+		if i < 0 {
+			continue
+		}
+		body := report[i+len(h):]
+		if j := strings.Index(body, "\n## "); j >= 0 {
+			body = body[:j]
+		}
+		body = strings.TrimSpace(body)
+		if len(body) > maxSummary {
+			cut := maxSummary
+			for cut > 0 && !utf8.RuneStart(body[cut]) {
+				cut--
+			}
+			body = body[:cut] + "..."
+		}
+		return body
+	}
+	return ""
 }
 
 // maxEventBatch bounds one upload. A single stream-json line can carry a
@@ -137,7 +261,8 @@ func (s *Server) runnerFinish(w http.ResponseWriter, r *http.Request) {
 }
 
 // RunFinished is called once per run, however it ended: count it, tell the
-// humans, and let the dispatcher start the next one.
+// humans, give batch members the run left alone a run of their own, and let
+// the dispatcher start the next one.
 func (s *Server) RunFinished(runID int64) {
 	ctx := context.Background()
 	run, err := s.store.GetRun(ctx, runID)
@@ -148,12 +273,30 @@ func (s *Server) RunFinished(runID int64) {
 	s.metrics.runs.WithLabelValues(run.Status).Inc()
 	if s.notifier != nil {
 		in, _, err := s.store.GetIncident(ctx, run.IncidentID)
-		if err == nil {
+		switch {
+		case err != nil:
+		case in.Merged() && in.MergedBy == agentActor(run.ID).mergedBy():
+			// The run folded its own incident into another, whose diagnosis
+			// covers it; the merge is in the UI's audit trail.
+			slog.Info("not notifying: run merged its incident", "run", run.ID, "into", *in.ParentID)
+		default:
 			var pr *store.PullRequest
 			if p, err := s.store.PullRequestForIncident(ctx, run.IncidentID); err == nil && p.RunID == run.ID {
 				pr = &p
 			}
 			go s.notifier.RunFinished(context.Background(), in, run, pr)
+		}
+	}
+	// Only after a run that did its job: a failed run (a usage limit, say)
+	// would fail the same way for each of them.
+	if run.Status == store.RunSucceeded {
+		left, err := s.store.LeftoverIncidents(ctx, run.ID)
+		if err != nil {
+			slog.Error("finding leftover incidents", "run", run.ID, "err", err)
+		}
+		for _, id := range left {
+			slog.Info("batch member left apart; queueing its own run", "run", run.ID, "incident", id)
+			s.enqueue(ctx, id, 0)
 		}
 	}
 	if s.waker != nil {

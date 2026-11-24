@@ -21,7 +21,8 @@ import (
 // tools as mcp__controller__<tool>.
 const ToolServerName = "controller"
 
-// mcpHandler serves the controller's tools to runners. It sits behind
+// mcpHandler serves the controller's tools (link_incident, merge_incident,
+// and propose_pr with the PR path on) to runners. It sits behind
 // runnerAuth, and is stateless: each request builds a server bound to the
 // run its token belongs to, so a tool can never act for another run.
 func (s *Server) mcpHandler() http.Handler {
@@ -32,6 +33,7 @@ func (s *Server) mcpHandler() http.Handler {
 
 func (s *Server) toolServer(run store.Run) *mcp.Server {
 	srv := mcp.NewServer(&mcp.Implementation{Name: ToolServerName, Version: "v1"}, nil)
+	s.addConsolidationTools(srv, run)
 	if s.prs == nil {
 		return srv
 	}
@@ -42,7 +44,8 @@ func (s *Server) toolServer(run store.Run) *mcp.Server {
 			"The controller applies it to the current main, refuses anything outside apps/ and infrastructure/, " +
 			"encrypted secrets and the agent's own manifests, and runs the repository's commit hooks (render, " +
 			"no plaintext Secret, no private addresses or names). On a refusal, fix the cause and call again; " +
-			"at most 3 calls per run, and one PR per incident. The agent can never merge.",
+			"at most 3 calls per run, and one PR per incident. A merged incident cannot propose (its parent owns the fix), " +
+			"and a change touching a file an open agent PR already changes is refused. The agent can never merge a PR.",
 		Annotations: &mcp.ToolAnnotations{DestructiveHint: ptr(false), OpenWorldHint: ptr(true)},
 	}, func(ctx context.Context, _ *mcp.CallToolRequest, in ProposeInput) (*mcp.CallToolResult, any, error) {
 		return s.proposeTool(ctx, run, in)

@@ -17,14 +17,83 @@ const (
 	ActionFailed    = "failed"
 )
 
-// StartAction records a tool call before the tool does anything, and returns
-// its id for FinishAction.
+// StartAction records an agent's tool call before the tool does anything,
+// and returns its id for FinishAction.
 func (s *Store) StartAction(ctx context.Context, runID, incidentID int64, tool string, input json.RawMessage) (int64, error) {
+	return s.RecordAction(ctx, ActionStart{
+		Actor: ActorAgent, RunID: runID, IncidentID: incidentID, Tool: tool, Input: input,
+	})
+}
+
+// Actors in the audit trail.
+const (
+	ActorAgent = "agent"
+	ActorUI    = "ui"
+)
+
+// ActionStart is an audit entry about to happen.
+type ActionStart struct {
+	Actor      string
+	RunID      int64 // 0 for a human
+	IncidentID int64
+	// TargetIncidentID is the other incident a merge or link touches; 0 if none.
+	TargetIncidentID int64
+	Tool             string
+	Input            json.RawMessage
+}
+
+// RecordAction writes an audit entry before its action runs, and returns
+// its id for FinishAction. A target that does not exist is recorded only in
+// the input: the action is then refused, but still audited.
+func (s *Store) RecordAction(ctx context.Context, a ActionStart) (int64, error) {
 	var id int64
 	err := s.pool.QueryRow(ctx, `
-		INSERT INTO actions (run_id, incident_id, tool, input) VALUES ($1, $2, $3, $4) RETURNING id`,
-		runID, incidentID, tool, []byte(input)).Scan(&id)
+		INSERT INTO actions (actor, run_id, incident_id, target_incident_id, tool, input)
+		VALUES ($1, NULLIF($2, 0), $3, (SELECT id FROM incidents WHERE id = $4), $5, $6) RETURNING id`,
+		a.Actor, a.RunID, a.IncidentID, a.TargetIncidentID, a.Tool, []byte(a.Input)).Scan(&id)
 	return id, err
+}
+
+// Action is one audit entry.
+type Action struct {
+	ID               int64
+	Actor            string
+	RunID            *int64
+	IncidentID       int64
+	TargetIncidentID *int64
+	Tool             string
+	Input            json.RawMessage
+	Status           string
+	Result           string
+	CreatedAt        time.Time
+	FinishedAt       *time.Time
+}
+
+// IncidentActions returns the audit trail of everything done to or about an
+// incident, oldest first: its runs' tool calls, and merges or links that
+// name it from either side.
+func (s *Store) IncidentActions(ctx context.Context, incidentID int64) ([]Action, error) {
+	rows, err := s.pool.Query(ctx, `
+		SELECT id, actor, run_id, incident_id, target_incident_id, tool, input, status, result,
+			created_at, finished_at
+		FROM actions WHERE incident_id = $1 OR target_incident_id = $1
+		ORDER BY id`, incidentID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []Action
+	for rows.Next() {
+		var a Action
+		var input []byte
+		if err := rows.Scan(&a.ID, &a.Actor, &a.RunID, &a.IncidentID, &a.TargetIncidentID, &a.Tool, &input,
+			&a.Status, &a.Result, &a.CreatedAt, &a.FinishedAt); err != nil {
+			return nil, err
+		}
+		a.Input = input
+		out = append(out, a)
+	}
+	return out, rows.Err()
 }
 
 // FinishAction records how a tool call ended.
@@ -71,6 +140,8 @@ type PullRequest struct {
 	CreatedAt  time.Time
 	UpdatedAt  time.Time
 	ClosedAt   *time.Time
+	// Files the PR changes, as the controller committed them.
+	Files []string
 
 	// From the incident, for lists.
 	AlertName string
@@ -78,7 +149,7 @@ type PullRequest struct {
 }
 
 const prColumns = `p.id, p.incident_id, p.run_id, p.number, p.url, p.title, p.branch, p.base_sha,
-	p.head_sha, p.state, p.checks, p.notified_at, p.created_at, p.updated_at, p.closed_at,
+	p.head_sha, p.state, p.checks, p.notified_at, p.created_at, p.updated_at, p.closed_at, p.files,
 	i.alertname, i.namespace`
 
 const prFrom = ` FROM pull_requests p JOIN incidents i ON i.id = p.incident_id`
@@ -86,7 +157,7 @@ const prFrom = ` FROM pull_requests p JOIN incidents i ON i.id = p.incident_id`
 func scanPR(row pgx.Row) (PullRequest, error) {
 	var p PullRequest
 	err := row.Scan(&p.ID, &p.IncidentID, &p.RunID, &p.Number, &p.URL, &p.Title, &p.Branch, &p.BaseSHA,
-		&p.HeadSHA, &p.State, &p.Checks, &p.NotifiedAt, &p.CreatedAt, &p.UpdatedAt, &p.ClosedAt,
+		&p.HeadSHA, &p.State, &p.Checks, &p.NotifiedAt, &p.CreatedAt, &p.UpdatedAt, &p.ClosedAt, &p.Files,
 		&p.AlertName, &p.Namespace)
 	return p, err
 }
@@ -95,9 +166,9 @@ func scanPR(row pgx.Row) (PullRequest, error) {
 func (s *Store) InsertPullRequest(ctx context.Context, p PullRequest) (int64, error) {
 	var id int64
 	err := s.pool.QueryRow(ctx, `
-		INSERT INTO pull_requests (incident_id, run_id, number, url, title, branch, base_sha, head_sha)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8) RETURNING id`,
-		p.IncidentID, p.RunID, p.Number, p.URL, p.Title, p.Branch, p.BaseSHA, p.HeadSHA).Scan(&id)
+		INSERT INTO pull_requests (incident_id, run_id, number, url, title, branch, base_sha, head_sha, files)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9) RETURNING id`,
+		p.IncidentID, p.RunID, p.Number, p.URL, p.Title, p.Branch, p.BaseSHA, p.HeadSHA, nonNilSlice(p.Files)).Scan(&id)
 	return id, err
 }
 
@@ -166,4 +237,11 @@ func (s *Store) SaveRunSession(ctx context.Context, runID int64, gz []byte, size
 		ON CONFLICT (run_id) DO UPDATE SET jsonl_gz = $2, size = $3, uploaded_at = now()`,
 		runID, gz, size)
 	return err
+}
+
+func nonNilSlice(s []string) []string {
+	if s == nil {
+		return []string{}
+	}
+	return s
 }

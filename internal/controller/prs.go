@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -79,6 +80,14 @@ func (s *Server) propose(ctx context.Context, run store.Run, in ProposeInput) (s
 	} else if !errors.Is(err, store.ErrNotFound) {
 		return store.PullRequest{}, err
 	}
+	incident, _, err := s.store.GetIncident(ctx, run.IncidentID)
+	if err != nil {
+		return store.PullRequest{}, err
+	}
+	if incident.Merged() {
+		return store.PullRequest{}, &proposal.Rejected{Reason: fmt.Sprintf(
+			"incident #%d is merged into #%d, which owns the fix; do not propose a PR from this run", incident.ID, *incident.ParentID)}
+	}
 	if err := proposal.CheckTitle(in.Title); err != nil {
 		return store.PullRequest{}, err
 	}
@@ -86,11 +95,6 @@ func (s *Server) propose(ctx context.Context, run store.Run, in ProposeInput) (s
 		return store.PullRequest{}, err
 	}
 	if err := proposal.CheckPatch(in.Patch); err != nil {
-		return store.PullRequest{}, err
-	}
-
-	incident, _, err := s.store.GetIncident(ctx, run.IncidentID)
-	if err != nil {
 		return store.PullRequest{}, err
 	}
 
@@ -103,6 +107,10 @@ func (s *Server) propose(ctx context.Context, run store.Run, in ProposeInput) (s
 		return store.PullRequest{}, err
 	}
 	defer commit.Close()
+	// After prepare, so the files are the ones git actually applied.
+	if err := s.checkOverlap(ctx, commit.Files); err != nil {
+		return store.PullRequest{}, err
+	}
 	if err := push(ctx, commit); err != nil {
 		return store.PullRequest{}, err
 	}
@@ -125,7 +133,7 @@ func (s *Server) propose(ctx context.Context, run store.Run, in ProposeInput) (s
 	}
 	pr := store.PullRequest{
 		IncidentID: run.IncidentID, RunID: run.ID, Number: gh.Number, URL: gh.HTMLURL, Title: in.Title,
-		Branch: commit.Branch, BaseSHA: commit.BaseSHA, HeadSHA: commit.HeadSHA,
+		Branch: commit.Branch, BaseSHA: commit.BaseSHA, HeadSHA: commit.HeadSHA, Files: commit.Files,
 		State: store.PROpen, Checks: store.ChecksPending, AlertName: incident.AlertName, Namespace: incident.Namespace,
 	}
 	if pr.ID, err = s.store.InsertPullRequest(ctx, pr); err != nil {
@@ -134,6 +142,31 @@ func (s *Server) propose(ctx context.Context, run store.Run, in ProposeInput) (s
 	s.metrics.prs.WithLabelValues("opened").Inc()
 	slog.Info("PR opened", "incident", run.IncidentID, "run", run.ID, "pr", gh.Number, "branch", commit.Branch)
 	return pr, nil
+}
+
+// checkOverlap refuses a change to a file an open agent PR already changes:
+// two agent PRs on one file are the same fix twice, or a conflict.
+func (s *Server) checkOverlap(ctx context.Context, files []string) error {
+	open, err := s.store.OpenPullRequests(ctx)
+	if err != nil {
+		return err
+	}
+	for _, pr := range open {
+		var shared []string
+		for _, f := range files {
+			if slices.Contains(pr.Files, f) {
+				shared = append(shared, f)
+			}
+		}
+		if len(shared) > 0 {
+			return &proposal.Rejected{Reason: fmt.Sprintf(
+				"open agent PR #%d (%s, incident #%d) already changes %s. Do not open a second PR on the same files: "+
+					"if this incident is the same problem, merge_incident into #%d; if it is related, link_incident and "+
+					"describe any further change in your report for the reviewer of #%d",
+				pr.Number, pr.URL, pr.IncidentID, strings.Join(shared, ", "), pr.IncidentID, pr.Number)}
+		}
+	}
+	return nil
 }
 
 // prBody is the PR description. The repository is private and PR bodies
