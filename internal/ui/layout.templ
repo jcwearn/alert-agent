@@ -50,6 +50,17 @@ templ layout(title string) {
 				.report.error, details.error summary { color: var(--firing); }
 				.step { margin: 6px 0; padding: 8px 12px; border-left: 3px solid var(--line); background: var(--card); border-radius: 0 6px 6px 0; }
 				.step-text { white-space: pre-wrap; border-left-color: var(--fg); }
+				.md { white-space: normal; }
+				.md > :first-child { margin-top: 0; }
+				.md > :last-child { margin-bottom: 0; }
+				.md h1, .md h2, .md h3 { font-size: 15px; margin: 14px 0 4px; }
+				.md p, .md ul, .md ol, .md pre, .md table { margin: 6px 0; }
+				.md ul, .md ol { padding-left: 22px; }
+				.md code { font: 12px/1.5 ui-monospace, monospace; background: var(--chip); padding: 1px 4px; border-radius: 4px; }
+				.md pre { background: var(--chip); padding: 8px 10px; border-radius: 6px; overflow-x: auto; white-space: pre; }
+				.md pre code { background: none; padding: 0; }
+				.md table { border-collapse: collapse; }
+				.md th, .md td { border: 1px solid var(--chip); padding: 2px 8px; }
 				.step-tool { border-left-color: var(--muted); }
 				.step-note { font-size: 13px; }
 				.step-meta { font-size: 13px; }
