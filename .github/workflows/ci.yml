@@ -12,4 +12,11 @@ jobs:
       contents: read
     # Renovate keeps this digest current and the comment naming its exact
     # release. Never `# v1`: it fails zizmor's ref-version-mismatch audit.
-    uses: jcwearn/workflows/.github/workflows/go-ci.yaml@1eafd3170f8e2ea3dc23d443c3fcfb0aa502e8b3 # v1.8.14
+    uses: jcwearn/workflows/.github/workflows/go-ci.yaml@a4078f8872df8f51a014632feadee3b7696860a1 # v1.9.0
+    with:
+      # The store tests start a real Postgres through embedded-postgres, which
+      # downloads its binaries from Maven Central into this directory on every
+      # cold run. One failed fetch failed a whole run (alert-agent#6); cached,
+      # the download happens once per embedded-postgres version.
+      cache-paths: ~/.embedded-postgres-go
+      cache-key: embedded-postgres
