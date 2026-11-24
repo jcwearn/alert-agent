@@ -63,7 +63,9 @@ templ runList(runs []store.Run) {
 		for _, r := range runs {
 			if r.Status == store.RunSucceeded && r.Report != "" {
 				<h2>Latest report</h2>
-				<div class="card report">{ r.Report }</div>
+				<div class="card report md">
+					@markdown(r.Report)
+				</div>
 				break
 			}
 		}
@@ -109,7 +111,9 @@ templ RunDetail(in store.Incident, run store.Run, items []TranscriptItem) {
 		}
 		if run.Report != "" {
 			<h2>Report</h2>
-			<div class="card report">{ run.Report }</div>
+			<div class="card report md">
+				@markdown(run.Report)
+			</div>
 		}
 		<h2>Transcript ({ strconv.Itoa(len(items)) } steps)</h2>
 		if len(items) == 0 {
@@ -118,7 +122,9 @@ templ RunDetail(in store.Incident, run store.Run, items []TranscriptItem) {
 		for _, it := range items {
 			switch it.Kind {
 				case ItemText:
-					<div class="step step-text">{ it.Body }</div>
+					<div class="step step-text md">
+						@markdown(it.Body)
+					</div>
 				case ItemTool:
 					<div class="step step-tool">
 						<div class="mono">{ it.Title }</div>
