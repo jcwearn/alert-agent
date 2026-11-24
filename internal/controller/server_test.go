@@ -21,6 +21,69 @@ type fakeStore struct {
 	recorded  []alertmanager.Payload
 	incidents []store.Incident
 	alerts    []store.IncidentAlert
+
+	enqueued  []int64
+	runs      map[int64]store.Run
+	tokenHash map[string]int64
+	events    map[int64][]store.RunEvent
+	finished  map[int64]store.RunResult
+}
+
+func (f *fakeStore) EnqueueRun(_ context.Context, incidentID int64) (int64, error) {
+	f.enqueued = append(f.enqueued, incidentID)
+	return int64(len(f.enqueued)), nil
+}
+
+func (f *fakeStore) RunByTokenHash(_ context.Context, hash []byte) (store.Run, error) {
+	id, ok := f.tokenHash[string(hash)]
+	if !ok || f.runs[id].Status != store.RunRunning {
+		return store.Run{}, store.ErrNotFound
+	}
+	return f.runs[id], nil
+}
+
+func (f *fakeStore) AppendRunEvents(_ context.Context, runID int64, events []store.RunEvent) error {
+	if f.events == nil {
+		f.events = map[int64][]store.RunEvent{}
+	}
+	f.events[runID] = append(f.events[runID], events...)
+	return nil
+}
+
+func (f *fakeStore) FinishRun(_ context.Context, runID int64, res store.RunResult) (bool, error) {
+	r, ok := f.runs[runID]
+	if !ok || r.Status != store.RunRunning {
+		return false, nil
+	}
+	if f.finished == nil {
+		f.finished = map[int64]store.RunResult{}
+	}
+	f.finished[runID] = res
+	r.Status, r.Report, r.Error = res.Status, res.Report, res.Error
+	f.runs[runID] = r
+	return true, nil
+}
+
+func (f *fakeStore) GetRun(_ context.Context, id int64) (store.Run, error) {
+	r, ok := f.runs[id]
+	if !ok {
+		return store.Run{}, store.ErrNotFound
+	}
+	return r, nil
+}
+
+func (f *fakeStore) ListRuns(_ context.Context, incidentID int64) ([]store.Run, error) {
+	var out []store.Run
+	for _, r := range f.runs {
+		if r.IncidentID == incidentID {
+			out = append(out, r)
+		}
+	}
+	return out, nil
+}
+
+func (f *fakeStore) RunEvents(_ context.Context, runID int64) ([]store.RunEvent, error) {
+	return f.events[runID], nil
 }
 
 func (f *fakeStore) Ping(context.Context) error { return f.pingErr }
@@ -93,7 +156,7 @@ func counter(t *testing.T, s *Server, name, label string) float64 {
 
 func TestWebhookRecords(t *testing.T) {
 	fs := &fakeStore{result: store.RecordResult{IncidentID: 7, Created: true}}
-	s := New(fs)
+	s := New(fs, Options{}, nil, nil)
 
 	status, _ := do(t, s.WebhookHandler(), http.MethodPost, "/webhook/alertmanager", validPayload)
 	if status != http.StatusNoContent {
@@ -112,7 +175,7 @@ func TestWebhookRecords(t *testing.T) {
 
 func TestWebhookRejectsBadPayload(t *testing.T) {
 	fs := &fakeStore{}
-	s := New(fs)
+	s := New(fs, Options{}, nil, nil)
 
 	status, _ := do(t, s.WebhookHandler(), http.MethodPost, "/webhook/alertmanager", `{"version":"3"}`)
 	if status != http.StatusBadRequest {
@@ -128,7 +191,7 @@ func TestWebhookRejectsBadPayload(t *testing.T) {
 
 // A store failure must be a 5xx, so Alertmanager retries the delivery.
 func TestWebhookStoreErrorIs5xx(t *testing.T) {
-	s := New(&fakeStore{recordErr: errors.New("db down")})
+	s := New(&fakeStore{recordErr: errors.New("db down")}, Options{}, nil, nil)
 
 	status, _ := do(t, s.WebhookHandler(), http.MethodPost, "/webhook/alertmanager", validPayload)
 	if status != http.StatusInternalServerError {
@@ -137,7 +200,7 @@ func TestWebhookStoreErrorIs5xx(t *testing.T) {
 }
 
 func TestWebhookNotOnUIPort(t *testing.T) {
-	s := New(&fakeStore{})
+	s := New(&fakeStore{}, Options{}, nil, nil)
 	if status, _ := do(t, s.UIHandler(), http.MethodPost, "/webhook/alertmanager", validPayload); status == http.StatusNoContent {
 		t.Fatal("webhook must only be served on the webhook port")
 	}
@@ -145,7 +208,7 @@ func TestWebhookNotOnUIPort(t *testing.T) {
 
 func TestReadyzFollowsDatabase(t *testing.T) {
 	fs := &fakeStore{}
-	s := New(fs)
+	s := New(fs, Options{}, nil, nil)
 	if status, _ := do(t, s.UIHandler(), http.MethodGet, "/readyz", ""); status != http.StatusOK {
 		t.Fatal("not ready")
 	}
@@ -172,7 +235,7 @@ func TestIncidentPages(t *testing.T) {
 			GeneratorURL: "javascript:alert(1)",
 		}},
 	}
-	s := New(fs)
+	s := New(fs, Options{}, nil, nil)
 	s.now = func() time.Time { return opened.Add(90 * time.Minute) }
 
 	_, body := do(t, s.UIHandler(), http.MethodGet, "/", "")

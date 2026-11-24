@@ -1,6 +1,6 @@
 // Command alert-agent is one binary with several roles: the long-running
-// controller, its schema migration, and (from Phase 2) the runner that wraps
-// `claude -p` inside a per-incident Job.
+// controller, its schema migration, and the runner that wraps `claude -p`
+// inside a per-incident Job.
 package main
 
 import (
@@ -11,9 +11,18 @@ import (
 	"net/url"
 	"os"
 	"os/signal"
+	"strconv"
 	"syscall"
+	"time"
+
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/client-go/kubernetes"
+	"k8s.io/client-go/rest"
 
 	"github.com/jcwearn/alert-agent/internal/controller"
+	"github.com/jcwearn/alert-agent/internal/dispatch"
+	"github.com/jcwearn/alert-agent/internal/github"
+	"github.com/jcwearn/alert-agent/internal/runner"
 	"github.com/jcwearn/alert-agent/internal/store"
 )
 
@@ -39,7 +48,7 @@ func run(args []string) int {
 	case "migrate":
 		err = runMigrate(ctx)
 	case "runner":
-		err = errors.New("runner: not implemented yet")
+		err = runRunner(ctx)
 	default:
 		fmt.Fprintln(os.Stderr, usage)
 		return 2
@@ -58,7 +67,110 @@ func runController(ctx context.Context) error {
 		return err
 	}
 	defer st.Close()
-	return controller.New(st).Run(ctx, envOr("LISTEN_ADDR", ":8080"), envOr("WEBHOOK_LISTEN_ADDR", ":8081"))
+
+	opts := controller.Options{
+		AgentEnabled: os.Getenv("AGENT_ENABLED") == "true",
+		PublicURL:    os.Getenv("PUBLIC_URL"),
+		MaxTurns:     envInt("RUN_MAX_TURNS", 40),
+	}
+
+	var notifier controller.Notifier
+	if hook := os.Getenv("SLACK_WEBHOOK_URL"); hook != "" {
+		notifier = &controller.SlackNotifier{WebhookURL: hook, PublicURL: opts.PublicURL}
+	}
+
+	addrs := []string{envOr("LISTEN_ADDR", ":8080"), envOr("WEBHOOK_LISTEN_ADDR", ":8081"), envOr("RUNNER_LISTEN_ADDR", ":8082")}
+	if !opts.AgentEnabled {
+		slog.Info("agent disabled: incidents are recorded, no runs are started")
+		return controller.New(st, opts, nil, notifier).Run(ctx, addrs[0], addrs[1], addrs[2])
+	}
+
+	var srv *controller.Server
+	d, err := newDispatcher(st, func(id int64) { srv.RunFinished(id) })
+	if err != nil {
+		return err
+	}
+	srv = controller.New(st, opts, d, notifier)
+	go d.Run(ctx)
+	return srv.Run(ctx, addrs[0], addrs[1], addrs[2])
+}
+
+func newDispatcher(st *store.Store, onFinish func(int64)) (*dispatch.Dispatcher, error) {
+	cfg, err := rest.InClusterConfig()
+	if err != nil {
+		return nil, fmt.Errorf("kubernetes config: %w", err)
+	}
+	kube, err := kubernetes.NewForConfig(cfg)
+	if err != nil {
+		return nil, err
+	}
+
+	keyPEM, err := os.ReadFile(envOr("GITHUB_PRIVATE_KEY_FILE", "/etc/alert-agent/github/private-key"))
+	if err != nil {
+		return nil, fmt.Errorf("github app key: %w", err)
+	}
+	key, err := github.ParsePrivateKey(keyPEM)
+	if err != nil {
+		return nil, err
+	}
+	app := &github.App{AppID: os.Getenv("GITHUB_APP_ID"), InstallationID: os.Getenv("GITHUB_INSTALLATION_ID"), Key: key}
+	if app.AppID == "" || app.InstallationID == "" {
+		return nil, errors.New("GITHUB_APP_ID and GITHUB_INSTALLATION_ID must be set")
+	}
+
+	namespace := envOr("POD_NAMESPACE", "alert-agent")
+	image, err := runnerImage(kube, namespace)
+	if err != nil {
+		return nil, err
+	}
+	slog.Info("runner image", "image", image)
+	return dispatch.New(dispatch.Config{
+		Namespace:      namespace,
+		Image:          image,
+		ServiceAccount: envOr("RUNNER_SERVICE_ACCOUNT", "alert-agent-runner"),
+		ClaudeSecret:   envOr("CLAUDE_SECRET", "alert-agent-claude"),
+		ControllerURL:  envOr("RUNNER_API_URL", "http://alert-agent.alert-agent.svc.cluster.local:8082"),
+		Repo:           envOr("REPO", "jcwearn/k3s-cluster"),
+		Model:          os.Getenv("RUN_MODEL"),
+		TZ:             envOr("TZ", "UTC"),
+		Timeout:        envDuration("RUN_TIMEOUT", 20*time.Minute),
+		MaxRunsPerHour: envInt("RUN_MAX_PER_HOUR", 6),
+		Interval:       10 * time.Second,
+	}, st, kube, app, onFinish), nil
+}
+
+// runnerImage is the image runner Jobs use: RUNNER_IMAGE if set, otherwise
+// this pod's own controller image. Reading it from the pod means a Renovate
+// bump of the Deployment's image moves the runners too, with no second pin to
+// forget.
+func runnerImage(kube kubernetes.Interface, namespace string) (string, error) {
+	if img := os.Getenv("RUNNER_IMAGE"); img != "" {
+		return img, nil
+	}
+	podName := os.Getenv("POD_NAME")
+	if podName == "" {
+		return "", errors.New("set RUNNER_IMAGE, or POD_NAME so the controller can use its own image")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	pod, err := kube.CoreV1().Pods(namespace).Get(ctx, podName, metav1.GetOptions{})
+	if err != nil {
+		return "", fmt.Errorf("read own pod for runner image: %w", err)
+	}
+	for _, c := range pod.Spec.Containers {
+		if c.Name == envOr("CONTROLLER_CONTAINER", "controller") {
+			return c.Image, nil
+		}
+	}
+	return "", errors.New("own pod has no controller container")
+}
+
+func runRunner(ctx context.Context) error {
+	cfg, err := runner.ConfigFromEnv()
+	if err != nil {
+		return err
+	}
+	return runner.Run(ctx, cfg)
 }
 
 func runMigrate(ctx context.Context) error {
@@ -89,6 +201,20 @@ func openStore(ctx context.Context) (*store.Store, error) {
 		RawQuery: "sslmode=" + envOr("DB_SSLMODE", "require"),
 	}
 	return store.Open(ctx, u.String())
+}
+
+func envInt(key string, fallback int) int {
+	if n, err := strconv.Atoi(os.Getenv(key)); err == nil && n > 0 {
+		return n
+	}
+	return fallback
+}
+
+func envDuration(key string, fallback time.Duration) time.Duration {
+	if d, err := time.ParseDuration(os.Getenv(key)); err == nil && d > 0 {
+		return d
+	}
+	return fallback
 }
 
 func envOr(key, fallback string) string {
