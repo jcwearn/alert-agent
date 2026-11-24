@@ -62,6 +62,12 @@ func ConfigFromEnv() (Config, error) {
 
 // Run carries out one run end to end. It always tries to report a result:
 // a runner that dies silently leaves the dispatcher to time it out.
+//
+// It returns nil once a result -- success or failure -- has been reported.
+// A failed run is the controller's to surface (UI, Slack); exiting non-zero
+// would also fail the Job and page through KubeJobFailed and
+// KubernetesPodNotHealthy for the same event. A non-nil error means the
+// runner could not report at all, which is exactly when the Job should fail.
 func Run(ctx context.Context, cfg Config) error {
 	api := &client{base: strings.TrimRight(cfg.ControllerURL, "/"), token: cfg.RunToken, http: cfg.HTTP}
 
@@ -128,10 +134,11 @@ func Run(ctx context.Context, cfg Config) error {
 	if err := api.finish(ctx, fin); err != nil {
 		return fmt.Errorf("report result: %w", err)
 	}
-	slog.Info("run finished", "status", fin.Status)
 	if fin.Status != "succeeded" {
-		return errors.New(fin.Error)
+		slog.Warn("run finished", "status", fin.Status, "error", fin.Error)
+		return nil
 	}
+	slog.Info("run finished", "status", fin.Status)
 	return nil
 }
 
