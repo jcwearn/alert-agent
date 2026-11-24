@@ -27,6 +27,8 @@ type fakeStore struct {
 	tokenHash map[string]int64
 	events    map[int64][]store.RunEvent
 	finished  map[int64]store.RunResult
+
+	prState *prState
 }
 
 func (f *fakeStore) EnqueueRun(_ context.Context, incidentID int64) (int64, error) {

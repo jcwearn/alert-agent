@@ -6,6 +6,7 @@ package runner
 import (
 	"bufio"
 	"bytes"
+	"compress/gzip"
 	"context"
 	"encoding/base64"
 	"encoding/json"
@@ -16,6 +17,7 @@ import (
 	"net/http"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -29,11 +31,14 @@ type Config struct {
 	GitHubToken   string
 	Repo          string // owner/name
 	WorkDir       string
-	ClaudeBin     string
-	GitBin        string
-	SelfBin       string // this binary, started by claude as the MCP tool server
-	Getenv        func(string) string
-	HTTP          *http.Client
+	// TmpDir holds files claude reads but the agent must not: the MCP config
+	// carries the run token. It is outside WorkDir, where Read cannot reach.
+	TmpDir    string
+	ClaudeBin string
+	GitBin    string
+	SelfBin   string // this binary, started by claude as the MCP tool server
+	Getenv    func(string) string
+	HTTP      *http.Client
 }
 
 // ConfigFromEnv reads the variables the dispatcher sets on the Job.
@@ -49,6 +54,7 @@ func ConfigFromEnv() (Config, error) {
 		GitHubToken:   os.Getenv("GITHUB_TOKEN"),
 		Repo:          os.Getenv("REPO"),
 		WorkDir:       "/work/repo",
+		TmpDir:        os.TempDir(),
 		ClaudeBin:     "claude",
 		GitBin:        "git",
 		Getenv:        os.Getenv,
@@ -81,16 +87,21 @@ func Run(ctx context.Context, cfg Config) error {
 		return api.fail(ctx, "checkout failed: "+err.Error())
 	}
 
-	settings, err := settingsJSON()
+	settings, err := settingsJSON(rc.ProposePR)
 	if err != nil {
 		return api.fail(ctx, err.Error())
 	}
-	mcpConfig, err := mcpConfigJSON(cfg.SelfBin, cfg.WorkDir, cfg.Getenv)
+	mcpConfig, err := mcpConfigJSON(cfg.SelfBin, cfg.WorkDir, cfg.Getenv, cfg.ControllerURL, cfg.RunToken, rc.ProposePR)
 	if err != nil {
 		return api.fail(ctx, err.Error())
 	}
+	mcpFile, err := writePrivate(cfg.TmpDir, "mcp-config-*.json", mcpConfig)
+	if err != nil {
+		return api.fail(ctx, "write mcp config: "+err.Error())
+	}
+	defer func() { _ = os.Remove(mcpFile) }()
 
-	cmd := exec.CommandContext(ctx, cfg.ClaudeBin, claudeArgs(rc, settings, mcpConfig, userPrompt(rc))...)
+	cmd := exec.CommandContext(ctx, cfg.ClaudeBin, claudeArgs(rc, settings, mcpFile, userPrompt(rc))...)
 	cmd.Dir = cfg.WorkDir
 	cmd.Env = claudeEnv(cfg.Getenv)
 	var stderr bytes.Buffer
@@ -105,6 +116,12 @@ func Run(ctx context.Context, cfg Config) error {
 
 	result, streamErr := stream(ctx, stdout, api)
 	waitErr := cmd.Wait()
+
+	// The session file lets a later run resume this conversation. Losing it
+	// costs only that, so a failure is logged and the run carries on.
+	if err := uploadSession(ctx, api, cfg.Getenv("HOME"), rc.SessionID); err != nil {
+		slog.Warn("session upload failed", "err", err)
+	}
 
 	fin := runnerapi.Finish{Status: "succeeded"}
 	if result != nil {
@@ -140,6 +157,52 @@ func Run(ctx context.Context, cfg Config) error {
 	}
 	slog.Info("run finished", "status", fin.Status)
 	return nil
+}
+
+// writePrivate writes content to a new 0600 file in dir.
+func writePrivate(dir, pattern, content string) (string, error) {
+	f, err := os.CreateTemp(dir, pattern)
+	if err != nil {
+		return "", err
+	}
+	if _, err := f.WriteString(content); err != nil {
+		_ = f.Close()
+		_ = os.Remove(f.Name())
+		return "", err
+	}
+	return f.Name(), f.Close()
+}
+
+// maxSession bounds the gzipped session upload; the controller enforces the
+// same limit.
+const maxSession = 32 << 20
+
+// uploadSession sends claude's transcript file for this session, found
+// under $HOME/.claude/projects/<cwd, sanitised>/<session-id>.jsonl.
+func uploadSession(ctx context.Context, api *client, home, sessionID string) error {
+	if home == "" || sessionID == "" {
+		return errors.New("no HOME or session id")
+	}
+	matches, err := filepath.Glob(filepath.Join(home, ".claude", "projects", "*", sessionID+".jsonl"))
+	if err != nil || len(matches) == 0 {
+		return fmt.Errorf("session file for %s not found", sessionID)
+	}
+	raw, err := os.ReadFile(matches[0])
+	if err != nil {
+		return err
+	}
+	var buf bytes.Buffer
+	zw := gzip.NewWriter(&buf)
+	if _, err := zw.Write(raw); err != nil {
+		return err
+	}
+	if err := zw.Close(); err != nil {
+		return err
+	}
+	if buf.Len() > maxSession {
+		return fmt.Errorf("session is %d bytes gzipped, over the %d limit", buf.Len(), maxSession)
+	}
+	return api.session(ctx, buf.Bytes())
 }
 
 // clone checks out the repo's main branch. The token travels as an HTTP

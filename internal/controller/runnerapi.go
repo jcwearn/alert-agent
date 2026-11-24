@@ -25,6 +25,9 @@ func (s *Server) RunnerHandler() http.Handler {
 	mux.HandleFunc("GET "+runnerapi.PathContext, s.runnerAuth(s.runnerContext))
 	mux.HandleFunc("POST "+runnerapi.PathEvents, s.runnerAuth(s.runnerEvents))
 	mux.HandleFunc("POST "+runnerapi.PathFinish, s.runnerAuth(s.runnerFinish))
+	mux.HandleFunc("POST "+runnerapi.PathSession, s.runnerAuth(s.runnerSession))
+	mcpHandler := s.mcpHandler()
+	mux.Handle(runnerapi.PathMCP, s.runnerAuth(mcpHandler.ServeHTTP))
 	return mux
 }
 
@@ -65,6 +68,7 @@ func (s *Server) runnerContext(w http.ResponseWriter, r *http.Request) {
 		Model:     run.Model,
 		MaxTurns:  s.opts.MaxTurns,
 		UIURL:     s.incidentURL(in.ID),
+		ProposePR: s.prs != nil,
 		Incident: runnerapi.Incident{
 			ID: in.ID, AlertName: in.AlertName, Namespace: in.Namespace, Severity: in.Severity,
 			Summary: in.Summary, AlertStatus: in.AlertStatus, OpenedAt: in.OpenedAt,
@@ -145,7 +149,11 @@ func (s *Server) RunFinished(runID int64) {
 	if s.notifier != nil {
 		in, _, err := s.store.GetIncident(ctx, run.IncidentID)
 		if err == nil {
-			go s.notifier.RunFinished(context.Background(), in, run)
+			var pr *store.PullRequest
+			if p, err := s.store.PullRequestForIncident(ctx, run.IncidentID); err == nil && p.RunID == run.ID {
+				pr = &p
+			}
+			go s.notifier.RunFinished(context.Background(), in, run, pr)
 		}
 	}
 	if s.waker != nil {

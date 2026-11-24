@@ -16,7 +16,8 @@ import (
 
 // Notifier tells a human how a run went.
 type Notifier interface {
-	RunFinished(ctx context.Context, in store.Incident, run store.Run)
+	// pr is the PR this run opened, if any.
+	RunFinished(ctx context.Context, in store.Incident, run store.Run, pr *store.PullRequest)
 }
 
 // SlackNotifier posts run results to a Slack incoming webhook. Diagnoses go
@@ -30,8 +31,8 @@ type SlackNotifier struct {
 
 // RunFinished posts one message. Failures are logged, not retried: the run
 // and its report are already safe in the database.
-func (n *SlackNotifier) RunFinished(ctx context.Context, in store.Incident, run store.Run) {
-	body, err := json.Marshal(slackMessage(n.PublicURL, in, run))
+func (n *SlackNotifier) RunFinished(ctx context.Context, in store.Incident, run store.Run, pr *store.PullRequest) {
+	body, err := json.Marshal(slackMessage(n.PublicURL, in, run, pr))
 	if err != nil {
 		return
 	}
@@ -88,7 +89,7 @@ const sectionLimit = 3000
 // cause and asides stay on the run page, one click away.
 var notifySections = []string{"Summary", "Recommended fix", "Confidence"}
 
-func slackMessage(publicURL string, in store.Incident, run store.Run) slackPayload {
+func slackMessage(publicURL string, in store.Incident, run store.Run, pr *store.PullRequest) slackPayload {
 	runURL := fmt.Sprintf("%s/runs/%d", strings.TrimRight(publicURL, "/"), run.ID)
 	where := in.AlertName
 	if in.Namespace != "" {
@@ -120,6 +121,10 @@ func slackMessage(publicURL string, in store.Incident, run store.Run) slackPaylo
 	if !found {
 		// A report that ignored the requested shape: send it whole, clipped.
 		blocks = append(blocks, mrkdwnSection(toMrkdwn(run.Report)))
+	}
+	if pr != nil {
+		blocks = append(blocks, mrkdwnSection(fmt.Sprintf(":wrench: *Proposed fix:* <%s|PR #%d> %s",
+			pr.URL, pr.Number, slackEscape(pr.Title))))
 	}
 	blocks = append(blocks, slackBlock{Type: "context", Elements: []*slackText{
 		{Type: "mrkdwn", Text: fmt.Sprintf("<%s|Full report and transcript>", runURL)},

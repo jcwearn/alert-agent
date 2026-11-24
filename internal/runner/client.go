@@ -34,6 +34,12 @@ func (c *client) finish(ctx context.Context, f runnerapi.Finish) error {
 	return c.do(ctx, http.MethodPost, runnerapi.PathFinish, f, nil)
 }
 
+// session uploads the gzipped session file, once: it is best effort.
+func (c *client) session(ctx context.Context, gz []byte) error {
+	_, err := c.once(ctx, http.MethodPost, runnerapi.PathSession, gz, nil)
+	return err
+}
+
 // fail reports a failed run. It returns an error only if the report itself
 // could not be delivered; see Run for why.
 func (c *client) fail(ctx context.Context, msg string) error {

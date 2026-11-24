@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 	"time"
@@ -146,8 +147,8 @@ func TestToolsAreAllReadOnly(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(res.Tools) != 8 {
-		t.Errorf("want 8 tools, got %d", len(res.Tools))
+	if len(res.Tools) != 9 {
+		t.Errorf("want 9 tools, got %d", len(res.Tools))
 	}
 	for _, tool := range res.Tools {
 		if tool.Annotations == nil || !tool.Annotations.ReadOnlyHint {
@@ -276,5 +277,30 @@ func TestGitTools(t *testing.T) {
 		if out, isErr := call(t, cs, "git_show", bad); !isErr {
 			t.Errorf("%v should be refused:\n%s", bad, out)
 		}
+	}
+}
+
+func TestGitDiff(t *testing.T) {
+	d := newDeps(t, http.NotFoundHandler())
+	cs := session(t, d)
+	out, isErr := call(t, cs, "git_diff", nil)
+	if isErr || !strings.Contains(out, "no changes") {
+		t.Fatalf("clean checkout:\n%s", out)
+	}
+
+	if err := os.WriteFile(filepath.Join(d.RepoDir, "apps", "ebooks", "deployment.yaml"), []byte("memory: 1Gi\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(d.RepoDir, "apps", "ebooks", "pdb.yaml"), []byte("kind: PodDisruptionBudget\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	out, isErr = call(t, cs, "git_diff", nil)
+	if isErr || !strings.Contains(out, "+memory: 1Gi") || !strings.Contains(out, "new file mode 100644") ||
+		!strings.Contains(out, "+kind: PodDisruptionBudget") {
+		t.Fatalf("diff:\n%s", out)
+	}
+	// Full blob ids, so the controller can fall back to a three-way apply.
+	if !regexp.MustCompile(`index [0-9a-f]{40}\.\.[0-9a-f]{40}`).MatchString(out) {
+		t.Errorf("diff lacks full index lines:\n%s", out)
 	}
 }

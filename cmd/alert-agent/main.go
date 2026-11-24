@@ -12,6 +12,7 @@ import (
 	"os"
 	"os/signal"
 	"strconv"
+	"strings"
 	"syscall"
 	"time"
 
@@ -27,6 +28,7 @@ import (
 	"github.com/jcwearn/alert-agent/internal/dispatch"
 	"github.com/jcwearn/alert-agent/internal/github"
 	"github.com/jcwearn/alert-agent/internal/mcptools"
+	"github.com/jcwearn/alert-agent/internal/proposal"
 	"github.com/jcwearn/alert-agent/internal/runner"
 	"github.com/jcwearn/alert-agent/internal/store"
 )
@@ -92,26 +94,25 @@ func runController(ctx context.Context) error {
 		return controller.New(st, opts, nil, notifier).Run(ctx, addrs[0], addrs[1], addrs[2])
 	}
 
+	app, err := githubApp()
+	if err != nil {
+		return err
+	}
 	var srv *controller.Server
-	d, err := newDispatcher(st, func(id int64) { srv.RunFinished(id) })
+	d, err := newDispatcher(st, app, func(id int64) { srv.RunFinished(id) })
 	if err != nil {
 		return err
 	}
 	srv = controller.New(st, opts, d, notifier)
+	if os.Getenv("PR_ENABLED") == "true" {
+		srv.EnablePRs(newPRs(app), newReviewer())
+		slog.Info("PR path enabled: runners may propose_pr")
+	}
 	go d.Run(ctx)
 	return srv.Run(ctx, addrs[0], addrs[1], addrs[2])
 }
 
-func newDispatcher(st *store.Store, onFinish func(int64)) (*dispatch.Dispatcher, error) {
-	cfg, err := rest.InClusterConfig()
-	if err != nil {
-		return nil, fmt.Errorf("kubernetes config: %w", err)
-	}
-	kube, err := kubernetes.NewForConfig(cfg)
-	if err != nil {
-		return nil, err
-	}
-
+func githubApp() (*github.App, error) {
 	keyPEM, err := os.ReadFile(envOr("GITHUB_PRIVATE_KEY_FILE", "/etc/alert-agent/github/private-key"))
 	if err != nil {
 		return nil, fmt.Errorf("github app key: %w", err)
@@ -123,6 +124,57 @@ func newDispatcher(st *store.Store, onFinish func(int64)) (*dispatch.Dispatcher,
 	app := &github.App{AppID: os.Getenv("GITHUB_APP_ID"), InstallationID: os.Getenv("GITHUB_INSTALLATION_ID"), Key: key}
 	if app.AppID == "" || app.InstallationID == "" {
 		return nil, errors.New("GITHUB_APP_ID and GITHUB_INSTALLATION_ID must be set")
+	}
+	return app, nil
+}
+
+// newPRs configures the PR path. PUBLIC_GATE lists, comma-separated, the
+// exact strings the repository's hooks must refuse (the real domain and
+// tailnet); the Deployment fills it from the cluster-vars substitution, so
+// the values never appear in a manifest.
+func newPRs(app *github.App) *controller.PRs {
+	var gate []string
+	for _, v := range strings.Split(os.Getenv("PUBLIC_GATE"), ",") {
+		if v = strings.TrimSpace(v); v != "" {
+			gate = append(gate, v)
+		}
+	}
+	if len(gate) == 0 {
+		slog.Warn("PUBLIC_GATE is empty: the hooks only catch private values a regex can see")
+	}
+	repo := envOr("REPO", "jcwearn/k3s-cluster")
+	return &controller.PRs{
+		GitHub: app,
+		Repo:   repo,
+		Proposal: proposal.Config{
+			Repo:        repo,
+			WorkDir:     envOr("PROPOSAL_WORK_DIR", "/work/proposals"),
+			Path:        envOr("PATH", "/usr/local/bin:/usr/bin:/bin"),
+			PublicGate:  gate,
+			AuthorName:  envOr("COMMIT_AUTHOR_NAME", "alert-agent[bot]"),
+			AuthorEmail: envOr("COMMIT_AUTHOR_EMAIL", "alert-agent[bot]@users.noreply.github.com"),
+		},
+	}
+}
+
+// newReviewer is the ntfy "needs your review" push, or nil if unconfigured.
+func newReviewer() controller.Reviewer {
+	base, token := os.Getenv("NTFY_URL"), os.Getenv("NTFY_TOKEN")
+	if base == "" || token == "" {
+		slog.Warn("NTFY_URL or NTFY_TOKEN unset: PRs will not be announced")
+		return nil
+	}
+	return &controller.NtfyReviewer{BaseURL: base, Topic: envOr("NTFY_TOPIC", "medic"), Token: token}
+}
+
+func newDispatcher(st *store.Store, app *github.App, onFinish func(int64)) (*dispatch.Dispatcher, error) {
+	cfg, err := rest.InClusterConfig()
+	if err != nil {
+		return nil, fmt.Errorf("kubernetes config: %w", err)
+	}
+	kube, err := kubernetes.NewForConfig(cfg)
+	if err != nil {
+		return nil, err
 	}
 
 	namespace := envOr("POD_NAMESPACE", "alert-agent")

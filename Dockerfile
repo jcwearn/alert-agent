@@ -1,6 +1,7 @@
-# One image, two roles. The controller needs only its Go binary; the runner
-# also needs the claude CLI and the read-only cluster tools the agent uses
-# (kubectl, flux, kustomize, git, curl, jq). Shipping both roles in one image
+# One image, two roles. The runner needs the claude CLI and the read-only
+# cluster tools the agent uses (kubectl, flux, kustomize, git, curl, jq). The
+# controller needs git, bash, yq, kustomize and flux: it runs the GitOps
+# repo's own .githooks on every patch the agent proposes. Shipping both roles in one image
 # keeps one release, one pin in k3s-cluster and one Renovate PR per bump.
 #
 # Base images are pinned by digest. Tool versions are ARGs carrying a
@@ -30,6 +31,8 @@ ARG KUBECTL_VERSION=v1.36.6
 ARG FLUX_VERSION=v2.10.1
 # renovate: datasource=github-releases depName=kubernetes-sigs/kustomize extractVersion=^kustomize/(?<version>v.+)$
 ARG KUSTOMIZE_VERSION=v5.8.3
+# renovate: datasource=github-releases depName=mikefarah/yq
+ARG YQ_VERSION=v4.54.3
 
 WORKDIR /dl
 RUN set -eux; \
@@ -43,7 +46,9 @@ RUN set -eux; \
     curl -fsSLO "https://github.com/kubernetes-sigs/kustomize/releases/download/kustomize%2F${KUSTOMIZE_VERSION}/${f}"; \
     curl -fsSL "https://github.com/kubernetes-sigs/kustomize/releases/download/kustomize%2F${KUSTOMIZE_VERSION}/checksums.txt" | grep " ${f}\$" | sha256sum -c -; \
     tar -xzf "$f" kustomize; \
-    install -m 0755 kubectl flux kustomize /usr/local/bin/
+    curl -fsSLo yq "https://github.com/mikefarah/yq/releases/download/${YQ_VERSION}/yq_linux_amd64"; \
+    echo "$(curl -fsSL "https://github.com/mikefarah/yq/releases/download/${YQ_VERSION}/checksums-bsd" | sed -n 's/^SHA256 (yq_linux_amd64) = //p')  yq" | sha256sum -c -; \
+    install -m 0755 kubectl flux kustomize yq /usr/local/bin/
 
 # The claude CLI. The npm package is a thin launcher; the platform package
 # carries the native binary, so only that is fetched and the runtime image
@@ -69,7 +74,7 @@ RUN set -eux; \
     groupadd --gid 65532 nonroot; \
     useradd --uid 65532 --gid 65532 --home-dir /home/nonroot --create-home --shell /usr/sbin/nologin nonroot
 
-COPY --from=tools /usr/local/bin/kubectl /usr/local/bin/flux /usr/local/bin/kustomize /usr/local/bin/
+COPY --from=tools /usr/local/bin/kubectl /usr/local/bin/flux /usr/local/bin/kustomize /usr/local/bin/yq /usr/local/bin/
 COPY --from=claude /usr/local/bin/claude /usr/local/bin/claude
 COPY --from=build /out/alert-agent /usr/local/bin/alert-agent
 
