@@ -30,6 +30,12 @@ linters:
         - diagnostic
         - style
         - performance
+      disabled-checks:
+        # Payloads, incidents and alerts are passed and ranged by value on
+        # purpose: they are read-only snapshots of a webhook or a row, and at a
+        # few deliveries a minute the copies cost nothing.
+        - hugeParam
+        - rangeValCopy
 
     revive:
       rules:

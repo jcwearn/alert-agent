@@ -1,13 +1,38 @@
 {
   "$schema": "https://docs.renovatebot.com/renovate-schema.json",
-  "extends": ["local>jcwearn/renovate-config"],
-  "addLabels": ["release:patch"],
+  "extends": [
+    "local>jcwearn/renovate-config"
+  ],
+  "addLabels": [
+    "release:patch"
+  ],
+  "packageRules": [
+    {
+      "description": "templ stamps its version into every generated file, so a templ bump fails the 'templ output is current' check unless the output is regenerated in the same PR. The command must also be allowed for this repo in the bot's global config (apps/renovate/data/renovate.json in jcwearn/k3s-cluster). executionMode must stay 'update': with grouped updates, 'branch' mode only sees the first upgrade's config.",
+      "matchPackageNames": [
+        "github.com/a-h/templ"
+      ],
+      "postUpgradeTasks": {
+        "commands": [
+          "go tool templ generate"
+        ],
+        "fileFilters": [
+          "**/*_templ.go"
+        ],
+        "executionMode": "update"
+      }
+    }
+  ],
   "customManagers": [
     {
       "description": "golangci-lint is pinned in a bare version file, which no standard manager knows how to read. See the go-ci.yaml section of the jcwearn/workflows README.",
       "customType": "regex",
-      "managerFilePatterns": ["/^\\.golangci-lint-version$/"],
-      "matchStrings": ["^v?(?<currentValue>.+?)\\s*$"],
+      "managerFilePatterns": [
+        "/^\\.golangci-lint-version$/"
+      ],
+      "matchStrings": [
+        "^v?(?<currentValue>.+?)\\s*$"
+      ],
       "depNameTemplate": "golangci/golangci-lint",
       "datasourceTemplate": "github-releases",
       "extractVersionTemplate": "^v(?<version>.*)$"

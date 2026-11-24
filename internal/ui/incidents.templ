@@ -1,0 +1,103 @@
+package ui
+
+import (
+	"strconv"
+	"time"
+
+	"github.com/jcwearn/alert-agent/internal/store"
+)
+
+// IncidentList is the home page.
+templ IncidentList(incidents []store.Incident, now time.Time) {
+	@layout("Incidents") {
+		<h1>Incidents</h1>
+		if len(incidents) == 0 {
+			<p class="muted">No incidents yet. They appear here when Alertmanager sends one.</p>
+		} else {
+			<div class="table-wrap">
+				<table>
+					<thead>
+						<tr>
+							<th>Status</th>
+							<th>Alert</th>
+							<th class="hide-narrow">Namespace</th>
+							<th class="hide-narrow">Severity</th>
+							<th>Opened</th>
+						</tr>
+					</thead>
+					<tbody>
+						for _, in := range incidents {
+							<tr>
+								<td>
+									@statusBadge(in.AlertStatus)
+								</td>
+								<td>
+									<a href={ templ.SafeURL("/incidents/" + strconv.FormatInt(in.ID, 10)) }>{ in.AlertName }</a>
+									if in.AlertCount > 1 {
+										<span class="muted">× { strconv.Itoa(in.AlertCount) }</span>
+									}
+									if in.Summary != "" {
+										<div class="muted">{ in.Summary }</div>
+									}
+								</td>
+								<td class="hide-narrow">{ in.Namespace }</td>
+								<td class="hide-narrow">{ in.Severity }</td>
+								<td title={ stamp(in.OpenedAt) }>{ ago(in.OpenedAt, now) }</td>
+							</tr>
+						}
+					</tbody>
+				</table>
+			</div>
+		}
+	}
+}
+
+// IncidentDetail is one incident and its alerts.
+templ IncidentDetail(in store.Incident, alerts []store.IncidentAlert) {
+	@layout(in.AlertName) {
+		<h1>
+			@statusBadge(in.AlertStatus)
+			{ in.AlertName }
+		</h1>
+		<div class="card">
+			<dl>
+				<dt>Incident</dt>
+				<dd>#{ strconv.FormatInt(in.ID, 10) }</dd>
+				<dt>Namespace</dt>
+				<dd>{ in.Namespace }</dd>
+				<dt>Severity</dt>
+				<dd>{ in.Severity }</dd>
+				<dt>Summary</dt>
+				<dd>{ in.Summary }</dd>
+				<dt>Opened</dt>
+				<dd>{ stamp(in.OpenedAt) }</dd>
+				<dt>Last update</dt>
+				<dd>{ stamp(in.UpdatedAt) }</dd>
+				if in.ResolvedAt != nil {
+					<dt>Resolved</dt>
+					<dd>{ stamp(*in.ResolvedAt) }</dd>
+				}
+			</dl>
+		</div>
+		<h2>Alerts ({ strconv.Itoa(len(alerts)) })</h2>
+		for _, a := range alerts {
+			<div class="card">
+				<p>
+					@statusBadge(a.Status)
+					<span class="muted">since { stamp(a.StartsAt) }</span>
+					if a.GeneratorURL != "" {
+						· <a href={ templ.URL(a.GeneratorURL) } rel="noreferrer">source</a>
+					}
+				</p>
+				if d := a.Annotations["description"]; d != "" {
+					<p>{ d }</p>
+				}
+				<div class="chips">
+					for _, l := range sorted(a.Labels) {
+						<span class="chip">{ l.K }={ l.V }</span>
+					}
+				</div>
+			</div>
+		}
+	}
+}

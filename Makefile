@@ -6,16 +6,20 @@ help: ## Show this help
 	@grep -hE '^[a-zA-Z_-]+:.*?## ' $(MAKEFILE_LIST) \
 		| awk 'BEGIN {FS = ":.*?## "}; {printf "  \033[36m%-14s\033[0m %s\n", $$1, $$2}'
 
+.PHONY: generate
+generate: ## Regenerate templ output
+	go tool templ generate
+
 .PHONY: build
-build: ## Build the binary into bin/
+build: generate ## Build the binary into bin/
 	CGO_ENABLED=0 go build -trimpath -o bin/alert-agent ./cmd/alert-agent
 
 .PHONY: run
-run: ## Run the controller locally on :8080
+run: generate ## Run the controller locally on :8080
 	go run ./cmd/alert-agent controller
 
 .PHONY: test
-test: ## Run the tests with the race detector
+test: generate ## Run the tests with the race detector
 	go test -race ./...
 
 .PHONY: lint
