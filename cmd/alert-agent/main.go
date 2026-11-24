@@ -107,7 +107,7 @@ func runController(ctx context.Context) error {
 	}
 	srv = controller.New(st, opts, d, notifier)
 	if os.Getenv("PR_ENABLED") == "true" {
-		srv.EnablePRs(newPRs(app), newReviewer())
+		srv.EnablePRs(newPRs(app), newReviewer(notifier))
 		slog.Info("PR path enabled: runners may propose_pr")
 	}
 	go d.Run(ctx)
@@ -159,14 +159,23 @@ func newPRs(app *github.App) *controller.PRs {
 	}
 }
 
-// newReviewer is the ntfy "needs your review" push, or nil if unconfigured.
-func newReviewer() controller.Reviewer {
+// newReviewer sends "needs your review" to ntfy and to Slack, whichever of
+// them is configured, or is nil if neither is.
+func newReviewer(slack controller.Notifier) controller.Reviewer {
+	var rs controller.Reviewers
 	base, token := os.Getenv("NTFY_URL"), os.Getenv("NTFY_TOKEN")
-	if base == "" || token == "" {
-		slog.Warn("NTFY_URL or NTFY_TOKEN unset: PRs will not be announced")
+	if base != "" && token != "" {
+		rs = append(rs, &controller.NtfyReviewer{BaseURL: base, Topic: envOr("NTFY_TOPIC", "medic"), Token: token})
+	} else {
+		slog.Warn("NTFY_URL or NTFY_TOKEN unset: PRs will not be announced on ntfy")
+	}
+	if r, ok := slack.(controller.Reviewer); ok {
+		rs = append(rs, r)
+	}
+	if len(rs) == 0 {
 		return nil
 	}
-	return &controller.NtfyReviewer{BaseURL: base, Topic: envOr("NTFY_TOPIC", "medic"), Token: token}
+	return rs
 }
 
 func newDispatcher(st *store.Store, app *github.App, onFinish func(int64)) (*dispatch.Dispatcher, error) {
