@@ -349,3 +349,26 @@ func (d *Deps) gitShow(ctx context.Context, _ *mcp.CallToolRequest, in GitShowIn
 	}
 	return text(out), nil, nil
 }
+
+// GitDiffInput takes no arguments.
+type GitDiffInput struct{}
+
+// gitDiff is the agent's own edits as a patch, in the exact form propose_pr
+// takes. New files are marked intent-to-add first so they appear too; that
+// touches only the checkout's index.
+func (d *Deps) gitDiff(ctx context.Context, _ *mcp.CallToolRequest, _ GitDiffInput) (*mcp.CallToolResult, any, error) {
+	if _, err := d.git(ctx, "add", "--all", "--intent-to-add"); err != nil {
+		return nil, nil, err
+	}
+	out, err := d.git(ctx, "diff", "--full-index", "--no-color", "--no-ext-diff")
+	if err != nil {
+		return nil, nil, err
+	}
+	if strings.TrimSpace(out) == "" {
+		return text("(no changes: edit files in the checkout first)"), nil, nil
+	}
+	if len(out) > maxOutput {
+		return nil, nil, fmt.Errorf("the diff is %d bytes, more than the %d a tool result can carry intact; make a smaller change", len(out), maxOutput)
+	}
+	return &mcp.CallToolResult{Content: []mcp.Content{&mcp.TextContent{Text: out}}}, nil, nil
+}

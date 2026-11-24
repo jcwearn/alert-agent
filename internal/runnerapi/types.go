@@ -13,15 +13,23 @@ const (
 	PathContext = "/runner/v1/context"
 	PathEvents  = "/runner/v1/events"
 	PathFinish  = "/runner/v1/finish"
+	// PathMCP serves the controller's MCP tools (propose_pr) over streamable
+	// HTTP, authenticated by the same run token.
+	PathMCP = "/runner/v1/mcp"
+	// PathSession takes the run's gzipped claude session file.
+	PathSession = "/runner/v1/session"
 )
 
 // Context is everything a runner needs to start.
 type Context struct {
-	RunID     int64    `json:"run_id"`
-	SessionID string   `json:"session_id"`
-	Model     string   `json:"model"`
-	MaxTurns  int      `json:"max_turns"`
-	UIURL     string   `json:"ui_url"`
+	RunID     int64  `json:"run_id"`
+	SessionID string `json:"session_id"`
+	Model     string `json:"model"`
+	MaxTurns  int    `json:"max_turns"`
+	UIURL     string `json:"ui_url"`
+	// ProposePR says the controller serves propose_pr for this run: the
+	// runner then adds the controller's MCP server and allows file edits.
+	ProposePR bool     `json:"propose_pr"`
 	Incident  Incident `json:"incident"`
 	Alerts    []Alert  `json:"alerts"`
 }

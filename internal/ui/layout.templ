@@ -59,6 +59,10 @@ templ layout(title string) {
 				.status-succeeded { color: var(--resolved); background: var(--resolved-bg); }
 				.status-failed { color: var(--firing); background: var(--firing-bg); }
 				.status-skipped { color: var(--muted); background: var(--chip); }
+				.status-open, .status-pending { color: var(--fg); background: var(--chip); }
+				.status-merged, .status-success { color: var(--resolved); background: var(--resolved-bg); }
+				.status-closed { color: var(--muted); background: var(--chip); }
+				.status-failure { color: var(--firing); background: var(--firing-bg); }
 				@media (max-width: 640px) { .hide-narrow { display: none; } }
 			</style>
 		</head>

@@ -8,8 +8,41 @@ import (
 )
 
 // IncidentList is the home page.
-templ IncidentList(incidents []store.Incident, now time.Time) {
+templ IncidentList(incidents []store.Incident, awaiting []store.PullRequest, now time.Time) {
 	@layout("Incidents") {
+		if len(awaiting) > 0 {
+			<h1>Awaiting review ({ strconv.Itoa(len(awaiting)) })</h1>
+			<div class="table-wrap">
+				<table>
+					<thead>
+						<tr>
+							<th>PR</th>
+							<th>CI</th>
+							<th class="hide-narrow">Incident</th>
+							<th>Opened</th>
+						</tr>
+					</thead>
+					<tbody>
+						for _, pr := range awaiting {
+							<tr>
+								<td>
+									<a href={ templ.URL(pr.URL) } rel="noreferrer">#{ strconv.Itoa(pr.Number) }</a>
+									<div class="muted">{ pr.Title }</div>
+								</td>
+								<td>
+									@statusBadge(pr.Checks)
+								</td>
+								<td class="hide-narrow">
+									<a href={ incidentURL(pr.IncidentID) }>#{ strconv.FormatInt(pr.IncidentID, 10) } { pr.AlertName }</a>
+									<div class="muted">{ pr.Namespace }</div>
+								</td>
+								<td title={ stamp(pr.CreatedAt) }>{ ago(pr.CreatedAt, now) }</td>
+							</tr>
+						}
+					</tbody>
+				</table>
+			</div>
+		}
 		<h1>Incidents</h1>
 		if len(incidents) == 0 {
 			<p class="muted">No incidents yet. They appear here when Alertmanager sends one.</p>
@@ -53,7 +86,7 @@ templ IncidentList(incidents []store.Incident, now time.Time) {
 }
 
 // IncidentDetail is one incident and its alerts.
-templ IncidentDetail(in store.Incident, alerts []store.IncidentAlert, runs []store.Run) {
+templ IncidentDetail(in store.Incident, alerts []store.IncidentAlert, runs []store.Run, pr *store.PullRequest) {
 	@layout(in.AlertName) {
 		<h1>
 			@statusBadge(in.AlertStatus)
@@ -79,6 +112,31 @@ templ IncidentDetail(in store.Incident, alerts []store.IncidentAlert, runs []sto
 				}
 			</dl>
 		</div>
+		if pr != nil {
+			<h2>Pull request</h2>
+			<div class="card">
+				<p>
+					@statusBadge(pr.State)
+					<a href={ templ.URL(pr.URL) } rel="noreferrer">#{ strconv.Itoa(pr.Number) } { pr.Title }</a>
+				</p>
+				<dl>
+					<dt>CI</dt>
+					<dd>
+						@statusBadge(pr.Checks)
+					</dd>
+					<dt>Branch</dt>
+					<dd class="mono">{ pr.Branch }</dd>
+					<dt>Proposed by</dt>
+					<dd><a href={ runURL(pr.RunID) }>run #{ strconv.FormatInt(pr.RunID, 10) }</a></dd>
+					<dt>Opened</dt>
+					<dd>{ stamp(pr.CreatedAt) }</dd>
+					if pr.ClosedAt != nil {
+						<dt>{ pr.State }</dt>
+						<dd>{ stamp(*pr.ClosedAt) }</dd>
+					}
+				</dl>
+			</div>
+		}
 		@runList(runs)
 		<h2>Alerts ({ strconv.Itoa(len(alerts)) })</h2>
 		for _, a := range alerts {

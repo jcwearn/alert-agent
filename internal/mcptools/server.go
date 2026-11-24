@@ -67,6 +67,7 @@ func NewServer(d *Deps, version string) *mcp.Server {
 		`Example: {namespace="ebooks"} |= "error"`}, d.lokiQuery)
 	mcp.AddTool(s, &mcp.Tool{Name: "git_log", Annotations: ro, Description: "Recent commits in the GitOps repository checkout, optionally limited to a path."}, d.gitLog)
 	mcp.AddTool(s, &mcp.Tool{Name: "git_show", Annotations: ro, Description: "Show one commit of the GitOps repository: message, stat and patch, optionally limited to a path."}, d.gitShow)
+	mcp.AddTool(s, &mcp.Tool{Name: "git_diff", Annotations: ro, Description: "Your uncommitted edits to the checkout as a unified diff. Pass the output, unchanged, as the patch argument of propose_pr."}, d.gitDiff)
 	return s
 }
 

@@ -29,7 +29,7 @@ type recordingNotifier struct {
 	done chan struct{}
 }
 
-func (n *recordingNotifier) RunFinished(_ context.Context, _ store.Incident, run store.Run) {
+func (n *recordingNotifier) RunFinished(_ context.Context, _ store.Incident, run store.Run, _ *store.PullRequest) {
 	n.mu.Lock()
 	n.runs = append(n.runs, run)
 	n.mu.Unlock()
@@ -205,7 +205,7 @@ func blockTexts(p slackPayload) string {
 
 func TestSlackMessageIsConcise(t *testing.T) {
 	in := store.Incident{ID: 3, AlertName: "KubePodCrashLooping", Namespace: "ebooks"}
-	msg := slackMessage("https://ui.example/", in, store.Run{ID: 7, Status: store.RunSucceeded, Report: sampleReport})
+	msg := slackMessage("https://ui.example/", in, store.Run{ID: 7, Status: store.RunSucceeded, Report: sampleReport}, nil)
 	all := blockTexts(msg)
 
 	for _, want := range []string{
@@ -232,7 +232,7 @@ func TestSlackMessageIsConcise(t *testing.T) {
 
 func TestSlackMessageWithoutSectionsFallsBack(t *testing.T) {
 	in := store.Incident{ID: 3, AlertName: "X"}
-	msg := slackMessage("https://ui.example", in, store.Run{ID: 7, Status: store.RunSucceeded, Report: "No headings here, <!here>."})
+	msg := slackMessage("https://ui.example", in, store.Run{ID: 7, Status: store.RunSucceeded, Report: "No headings here, <!here>."}, nil)
 	if all := blockTexts(msg); !strings.Contains(all, "No headings here") || strings.Contains(all, "<!here>") {
 		t.Errorf("fallback wrong:\n%s", all)
 	}
@@ -240,7 +240,7 @@ func TestSlackMessageWithoutSectionsFallsBack(t *testing.T) {
 
 func TestSlackMessageForFailure(t *testing.T) {
 	in := store.Incident{ID: 3, AlertName: "X", Namespace: "ebooks"}
-	msg := slackMessage("https://ui.example", in, store.Run{ID: 7, Status: store.RunFailed, Error: "claude produced no result <boom>"})
+	msg := slackMessage("https://ui.example", in, store.Run{ID: 7, Status: store.RunFailed, Error: "claude produced no result <boom>"}, nil)
 	all := blockTexts(msg)
 	if !strings.Contains(all, "*Agent run failed:*") || !strings.Contains(all, "```claude produced no result &lt;boom&gt;```") {
 		t.Errorf("failure message wrong:\n%s", all)
@@ -252,7 +252,7 @@ func TestSlackMessageForFailure(t *testing.T) {
 
 func TestSlackSectionsStayUnderLimit(t *testing.T) {
 	long := "## Summary\n" + strings.Repeat("é", 5000)
-	msg := slackMessage("https://ui.example", store.Incident{ID: 1, AlertName: "X"}, store.Run{ID: 1, Status: store.RunSucceeded, Report: long})
+	msg := slackMessage("https://ui.example", store.Incident{ID: 1, AlertName: "X"}, store.Run{ID: 1, Status: store.RunSucceeded, Report: long}, nil)
 	for _, bl := range msg.Blocks {
 		if bl.Text != nil && len([]rune(bl.Text.Text)) > sectionLimit {
 			t.Errorf("section has %d runes, limit %d", len([]rune(bl.Text.Text)), sectionLimit)

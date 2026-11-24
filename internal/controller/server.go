@@ -6,6 +6,7 @@ package controller
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"io"
 	"log/slog"
@@ -35,6 +36,16 @@ type Store interface {
 	GetRun(ctx context.Context, id int64) (store.Run, error)
 	ListRuns(ctx context.Context, incidentID int64) ([]store.Run, error)
 	RunEvents(ctx context.Context, runID int64) ([]store.RunEvent, error)
+
+	StartAction(ctx context.Context, runID, incidentID int64, tool string, input json.RawMessage) (int64, error)
+	FinishAction(ctx context.Context, id int64, status, result string) error
+	CountActions(ctx context.Context, runID int64, tool string) (int, error)
+	InsertPullRequest(ctx context.Context, p store.PullRequest) (int64, error)
+	PullRequestForIncident(ctx context.Context, incidentID int64) (store.PullRequest, error)
+	OpenPullRequests(ctx context.Context) ([]store.PullRequest, error)
+	UpdatePullRequest(ctx context.Context, id int64, st store.PRStatus) error
+	MarkPullRequestNotified(ctx context.Context, id int64) (bool, error)
+	SaveRunSession(ctx context.Context, runID int64, gz []byte, size int) error
 }
 
 // Options configure the agent side of the controller.
@@ -63,11 +74,19 @@ type Server struct {
 	now      func() time.Time
 	waker    Waker
 	notifier Notifier
+	prs      *PRs
+	reviewer Reviewer
 }
 
 // New returns a Server backed by st. waker and notifier may be nil.
 func New(st Store, opts Options, waker Waker, notifier Notifier) *Server {
 	return &Server{store: st, opts: opts, metrics: newMetrics(), now: time.Now, waker: waker, notifier: notifier}
+}
+
+// EnablePRs turns on the PR path: propose_pr for runners, the PR poller,
+// and review notifications through reviewer (which may be nil).
+func (s *Server) EnablePRs(p *PRs, reviewer Reviewer) {
+	s.prs, s.reviewer = p, reviewer
 }
 
 func (s *Server) incidentURL(id int64) string {
@@ -173,7 +192,13 @@ func (s *Server) incidentList(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "could not load incidents", http.StatusInternalServerError)
 		return
 	}
-	render(w, r, ui.IncidentList(incidents, s.now()))
+	var awaiting []store.PullRequest
+	if s.prs != nil {
+		if awaiting, err = s.store.OpenPullRequests(r.Context()); err != nil {
+			slog.Error("listing open PRs", "err", err)
+		}
+	}
+	render(w, r, ui.IncidentList(incidents, awaiting, s.now()))
 }
 
 func (s *Server) incidentDetail(w http.ResponseWriter, r *http.Request) {
@@ -198,7 +223,13 @@ func (s *Server) incidentDetail(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "could not load runs", http.StatusInternalServerError)
 		return
 	}
-	render(w, r, ui.IncidentDetail(in, alerts, runs))
+	var pr *store.PullRequest
+	if p, err := s.store.PullRequestForIncident(r.Context(), id); err == nil {
+		pr = &p
+	} else if !errors.Is(err, store.ErrNotFound) {
+		slog.Error("loading PR", "incident", id, "err", err)
+	}
+	render(w, r, ui.IncidentDetail(in, alerts, runs, pr))
 }
 
 func (s *Server) runDetail(w http.ResponseWriter, r *http.Request) {
@@ -246,6 +277,10 @@ func (s *Server) Run(ctx context.Context, uiAddr, webhookAddr, runnerAddr string
 		{Addr: uiAddr, Handler: s.UIHandler(), ReadHeaderTimeout: 10 * time.Second},
 		{Addr: webhookAddr, Handler: s.WebhookHandler(), ReadHeaderTimeout: 10 * time.Second},
 		{Addr: runnerAddr, Handler: s.RunnerHandler(), ReadHeaderTimeout: 10 * time.Second},
+	}
+
+	if s.prs != nil {
+		go s.pollPRs(ctx)
 	}
 
 	errCh := make(chan error, len(servers))
