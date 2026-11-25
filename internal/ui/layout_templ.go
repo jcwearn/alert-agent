@@ -40,7 +40,33 @@ func layout(title string) templ.Component {
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
 		}
-		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 2, " · alert-agent</title><style>\n\t\t\t\t:root {\n\t\t\t\t\t--bg: #f7f7f5; --fg: #1d1d1b; --muted: #6b6b66; --line: #e2e2dc; --card: #ffffff;\n\t\t\t\t\t--firing: #b42318; --firing-bg: #fdecea; --resolved: #1f7a3d; --resolved-bg: #e7f4ec;\n\t\t\t\t\t--chip: #efefea;\n\t\t\t\t}\n\t\t\t\t@media (prefers-color-scheme: dark) {\n\t\t\t\t\t:root {\n\t\t\t\t\t\t--bg: #141413; --fg: #ecece8; --muted: #9a9a93; --line: #2c2c29; --card: #1c1c1a;\n\t\t\t\t\t\t--firing: #ff8a80; --firing-bg: #3a1714; --resolved: #7fd29b; --resolved-bg: #13301e;\n\t\t\t\t\t\t--chip: #262624;\n\t\t\t\t\t}\n\t\t\t\t}\n\t\t\t\t* { box-sizing: border-box; }\n\t\t\t\tbody { margin: 0; background: var(--bg); color: var(--fg);\n\t\t\t\t\tfont: 15px/1.5 ui-sans-serif, system-ui, -apple-system, sans-serif; }\n\t\t\t\theader { border-bottom: 1px solid var(--line); padding: 12px 16px; }\n\t\t\t\theader a { color: inherit; text-decoration: none; font-weight: 600; }\n\t\t\t\tmain { max-width: 1100px; margin: 0 auto; padding: 16px; }\n\t\t\t\th1 { font-size: 20px; margin: 0 0 12px; }\n\t\t\t\th2 { font-size: 16px; margin: 24px 0 8px; }\n\t\t\t\ta { color: inherit; }\n\t\t\t\t.muted { color: var(--muted); }\n\t\t\t\ttable { width: 100%; border-collapse: collapse; background: var(--card);\n\t\t\t\t\tborder: 1px solid var(--line); border-radius: 8px; overflow: hidden; }\n\t\t\t\tth, td { text-align: left; padding: 8px 10px; border-bottom: 1px solid var(--line); vertical-align: top; }\n\t\t\t\tth { font-size: 12px; text-transform: uppercase; letter-spacing: .04em; color: var(--muted); font-weight: 600; }\n\t\t\t\ttr:last-child td { border-bottom: 0; }\n\t\t\t\t.status { display: inline-block; padding: 1px 8px; border-radius: 999px; font-size: 12px; font-weight: 600; }\n\t\t\t\t.status-firing { color: var(--firing); background: var(--firing-bg); }\n\t\t\t\t.status-resolved { color: var(--resolved); background: var(--resolved-bg); }\n\t\t\t\t.chips { display: flex; flex-wrap: wrap; gap: 4px; }\n\t\t\t\t.chip { background: var(--chip); border-radius: 4px; padding: 0 6px; font: 12px/1.6 ui-monospace, monospace; }\n\t\t\t\t.card { background: var(--card); border: 1px solid var(--line); border-radius: 8px; padding: 12px 14px; margin-bottom: 10px; }\n\t\t\t\tdl { display: grid; grid-template-columns: max-content 1fr; gap: 4px 12px; margin: 0; }\n\t\t\t\tdt { color: var(--muted); }\n\t\t\t\tdd { margin: 0; overflow-wrap: anywhere; }\n\t\t\t\t.table-wrap { overflow-x: auto; }\n\t\t\t\t.mono { font: 13px/1.5 ui-monospace, monospace; overflow-wrap: anywhere; }\n\t\t\t\t.report { white-space: pre-wrap; overflow-wrap: anywhere; }\n\t\t\t\t.report.error, details.error summary { color: var(--firing); }\n\t\t\t\t.step { margin: 6px 0; padding: 8px 12px; border-left: 3px solid var(--line); background: var(--card); border-radius: 0 6px 6px 0; }\n\t\t\t\t.step-text { white-space: pre-wrap; border-left-color: var(--fg); }\n\t\t\t\t.md { white-space: normal; }\n\t\t\t\t.md > :first-child { margin-top: 0; }\n\t\t\t\t.md > :last-child { margin-bottom: 0; }\n\t\t\t\t.md h1, .md h2, .md h3 { font-size: 15px; margin: 14px 0 4px; }\n\t\t\t\t.md p, .md ul, .md ol, .md pre, .md table { margin: 6px 0; }\n\t\t\t\t.md ul, .md ol { padding-left: 22px; }\n\t\t\t\t.md code { font: 12px/1.5 ui-monospace, monospace; background: var(--chip); padding: 1px 4px; border-radius: 4px; }\n\t\t\t\t.md pre { background: var(--chip); padding: 8px 10px; border-radius: 6px; overflow-x: auto; white-space: pre; }\n\t\t\t\t.md pre code { background: none; padding: 0; }\n\t\t\t\t.md table { border-collapse: collapse; }\n\t\t\t\t.md th, .md td { border: 1px solid var(--chip); padding: 2px 8px; }\n\t\t\t\t.step-tool { border-left-color: var(--muted); }\n\t\t\t\t.step-note { font-size: 13px; }\n\t\t\t\t.step-meta { font-size: 13px; }\n\t\t\t\t.step pre { margin: 6px 0 0; white-space: pre-wrap; overflow-wrap: anywhere; font: 12px/1.5 ui-monospace, monospace; max-height: 480px; overflow-y: auto; }\n\t\t\t\tsummary { cursor: pointer; font-size: 13px; color: var(--muted); }\n\t\t\t\t.status-queued, .status-running { color: var(--fg); background: var(--chip); }\n\t\t\t\t.status-succeeded { color: var(--resolved); background: var(--resolved-bg); }\n\t\t\t\t.status-failed { color: var(--firing); background: var(--firing-bg); }\n\t\t\t\t.status-skipped { color: var(--muted); background: var(--chip); }\n\t\t\t\t.status-open, .status-pending { color: var(--fg); background: var(--chip); }\n\t\t\t\t.status-merged, .status-success { color: var(--resolved); background: var(--resolved-bg); }\n\t\t\t\t.status-closed { color: var(--muted); background: var(--chip); }\n\t\t\t\t.status-failure { color: var(--firing); background: var(--firing-bg); }\n\t\t\t\t.status-started, .status-rejected { color: var(--muted); background: var(--chip); }\n\t\t\t\ttr.child td { background: var(--bg); }\n\t\t\t\ttr.child td:first-child { padding-left: 22px; }\n\t\t\t\ta.chip { text-decoration: none; margin-left: 4px; }\n\t\t\t\t.notice.error, .merged { border-color: var(--firing); }\n\t\t\t\t.merged p { margin: 0 0 6px; }\n\t\t\t\tul.plain { list-style: none; padding: 0; margin: 4px 0 10px; }\n\t\t\t\tul.plain li { margin: 4px 0; }\n\t\t\t\tform.inline { display: inline; margin-left: 6px; }\n\t\t\t\t.forms { display: grid; gap: 12px; margin-top: 8px; border-top: 1px solid var(--line); padding-top: 10px; }\n\t\t\t\t.forms label { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }\n\t\t\t\t.forms input[type=text] { width: 100%; margin: 6px 0; }\n\t\t\t\tselect, input, button { font: inherit; color: var(--fg); background: var(--card); border: 1px solid var(--line); border-radius: 6px; padding: 4px 8px; max-width: 100%; }\n\t\t\t\tbutton { cursor: pointer; }\n\t\t\t\t.hint { font-size: 13px; }\n\t\t\t\t.chat { display: grid; gap: 8px; }\n\t\t\t\t.msg { border: 1px solid var(--line); border-radius: 8px; padding: 8px 12px; background: var(--card); }\n\t\t\t\t.msg-agent { border-left: 3px solid var(--resolved); }\n\t\t\t\t.msg-meta { font-size: 13px; color: var(--muted); margin-bottom: 4px; }\n\t\t\t\t.msg-body { white-space: pre-wrap; overflow-wrap: anywhere; }\n\t\t\t\t.msg pre.hunk { margin: 4px 0; font: 12px/1.4 ui-monospace, monospace; white-space: pre-wrap; color: var(--muted); }\n\t\t\t\t.live { border-style: dashed; }\n\t\t\t\t.live .step { font-size: 13px; margin: 2px 0; white-space: pre-wrap; overflow-wrap: anywhere; }\n\t\t\t\t.chat form textarea { width: 100%; min-height: 80px; font: inherit; color: var(--fg); background: var(--card); border: 1px solid var(--line); border-radius: 6px; padding: 6px 8px; }\n\t\t\t\t.chip.kind { font-size: 12px; margin-left: 6px; }\n\t\t\t\t@media (max-width: 640px) { .hide-narrow { display: none; } }\n\t\t\t</style></head><body><header><a href=\"/\">alert-agent</a></header><main>")
+		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 2, " · alert-agent</title><link rel=\"stylesheet\" href=\"")
+		if templ_7745c5c3_Err != nil {
+			return templ_7745c5c3_Err
+		}
+		var templ_7745c5c3_Var3 string
+		templ_7745c5c3_Var3, templ_7745c5c3_Err = templruntime.NewAttributeExpression(assetURL("chat.css")).ResolveURL(ctx)
+		if templ_7745c5c3_Err != nil {
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/ui/layout.templ`, Line: 10, Col: 53}
+		}
+		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var3)
+		if templ_7745c5c3_Err != nil {
+			return templ_7745c5c3_Err
+		}
+		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 3, "\"><script src=\"")
+		if templ_7745c5c3_Err != nil {
+			return templ_7745c5c3_Err
+		}
+		var templ_7745c5c3_Var4 string
+		templ_7745c5c3_Var4, templ_7745c5c3_Err = templruntime.NewAttributeExpression(assetURL("chat.js")).ResolveURL(ctx)
+		if templ_7745c5c3_Err != nil {
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/ui/layout.templ`, Line: 11, Col: 36}
+		}
+		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var4)
+		if templ_7745c5c3_Err != nil {
+			return templ_7745c5c3_Err
+		}
+		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 4, "\" defer></script><style>\n\t\t\t\t:root {\n\t\t\t\t\t--bg: #f7f7f5; --fg: #1d1d1b; --muted: #6b6b66; --line: #e2e2dc; --card: #ffffff;\n\t\t\t\t\t--firing: #b42318; --firing-bg: #fdecea; --resolved: #1f7a3d; --resolved-bg: #e7f4ec;\n\t\t\t\t\t--chip: #efefea;\n\t\t\t\t}\n\t\t\t\t@media (prefers-color-scheme: dark) {\n\t\t\t\t\t:root {\n\t\t\t\t\t\t--bg: #141413; --fg: #ecece8; --muted: #9a9a93; --line: #2c2c29; --card: #1c1c1a;\n\t\t\t\t\t\t--firing: #ff8a80; --firing-bg: #3a1714; --resolved: #7fd29b; --resolved-bg: #13301e;\n\t\t\t\t\t\t--chip: #262624;\n\t\t\t\t\t}\n\t\t\t\t}\n\t\t\t\t* { box-sizing: border-box; }\n\t\t\t\tbody { margin: 0; background: var(--bg); color: var(--fg);\n\t\t\t\t\tfont: 15px/1.5 ui-sans-serif, system-ui, -apple-system, sans-serif; }\n\t\t\t\theader { border-bottom: 1px solid var(--line); padding: 12px 16px; }\n\t\t\t\theader a { color: inherit; text-decoration: none; font-weight: 600; }\n\t\t\t\tmain { max-width: 1100px; margin: 0 auto; padding: 16px; }\n\t\t\t\th1 { font-size: 20px; margin: 0 0 12px; }\n\t\t\t\th2 { font-size: 16px; margin: 24px 0 8px; }\n\t\t\t\ta { color: inherit; }\n\t\t\t\t.muted { color: var(--muted); }\n\t\t\t\ttable { width: 100%; border-collapse: collapse; background: var(--card);\n\t\t\t\t\tborder: 1px solid var(--line); border-radius: 8px; overflow: hidden; }\n\t\t\t\tth, td { text-align: left; padding: 8px 10px; border-bottom: 1px solid var(--line); vertical-align: top; }\n\t\t\t\tth { font-size: 12px; text-transform: uppercase; letter-spacing: .04em; color: var(--muted); font-weight: 600; }\n\t\t\t\ttr:last-child td { border-bottom: 0; }\n\t\t\t\t.status { display: inline-block; padding: 1px 8px; border-radius: 999px; font-size: 12px; font-weight: 600; }\n\t\t\t\t.status-firing { color: var(--firing); background: var(--firing-bg); }\n\t\t\t\t.status-resolved { color: var(--resolved); background: var(--resolved-bg); }\n\t\t\t\t.chips { display: flex; flex-wrap: wrap; gap: 4px; }\n\t\t\t\t.chip { background: var(--chip); border-radius: 4px; padding: 0 6px; font: 12px/1.6 ui-monospace, monospace; }\n\t\t\t\t.card { background: var(--card); border: 1px solid var(--line); border-radius: 8px; padding: 12px 14px; margin-bottom: 10px; }\n\t\t\t\tdl { display: grid; grid-template-columns: max-content 1fr; gap: 4px 12px; margin: 0; }\n\t\t\t\tdt { color: var(--muted); }\n\t\t\t\tdd { margin: 0; overflow-wrap: anywhere; }\n\t\t\t\t.table-wrap { overflow-x: auto; }\n\t\t\t\t.mono { font: 13px/1.5 ui-monospace, monospace; overflow-wrap: anywhere; }\n\t\t\t\t.report { white-space: pre-wrap; overflow-wrap: anywhere; }\n\t\t\t\t.report.error, details.error summary { color: var(--firing); }\n\t\t\t\t.step { margin: 6px 0; padding: 8px 12px; border-left: 3px solid var(--line); background: var(--card); border-radius: 0 6px 6px 0; }\n\t\t\t\t.step-text { white-space: pre-wrap; border-left-color: var(--fg); }\n\t\t\t\t.md { white-space: normal; }\n\t\t\t\t.md > :first-child { margin-top: 0; }\n\t\t\t\t.md > :last-child { margin-bottom: 0; }\n\t\t\t\t.md h1, .md h2, .md h3 { font-size: 15px; margin: 14px 0 4px; }\n\t\t\t\t.md p, .md ul, .md ol, .md pre, .md table { margin: 6px 0; }\n\t\t\t\t.md ul, .md ol { padding-left: 22px; }\n\t\t\t\t.md code { font: 12px/1.5 ui-monospace, monospace; background: var(--chip); padding: 1px 4px; border-radius: 4px; }\n\t\t\t\t.md pre { background: var(--chip); padding: 8px 10px; border-radius: 6px; overflow-x: auto; white-space: pre; }\n\t\t\t\t.md pre code { background: none; padding: 0; }\n\t\t\t\t.md table { border-collapse: collapse; }\n\t\t\t\t.md th, .md td { border: 1px solid var(--chip); padding: 2px 8px; }\n\t\t\t\t.step-tool { border-left-color: var(--muted); }\n\t\t\t\t.step-note { font-size: 13px; }\n\t\t\t\t.step-meta { font-size: 13px; }\n\t\t\t\t.step pre { margin: 6px 0 0; white-space: pre-wrap; overflow-wrap: anywhere; font: 12px/1.5 ui-monospace, monospace; max-height: 480px; overflow-y: auto; }\n\t\t\t\tsummary { cursor: pointer; font-size: 13px; color: var(--muted); }\n\t\t\t\t.status-queued, .status-running { color: var(--fg); background: var(--chip); }\n\t\t\t\t.status-succeeded { color: var(--resolved); background: var(--resolved-bg); }\n\t\t\t\t.status-failed { color: var(--firing); background: var(--firing-bg); }\n\t\t\t\t.status-skipped { color: var(--muted); background: var(--chip); }\n\t\t\t\t.status-open, .status-pending { color: var(--fg); background: var(--chip); }\n\t\t\t\t.status-merged, .status-success { color: var(--resolved); background: var(--resolved-bg); }\n\t\t\t\t.status-closed { color: var(--muted); background: var(--chip); }\n\t\t\t\t.status-failure { color: var(--firing); background: var(--firing-bg); }\n\t\t\t\t.status-started, .status-rejected { color: var(--muted); background: var(--chip); }\n\t\t\t\ttr.child td { background: var(--bg); }\n\t\t\t\ttr.child td:first-child { padding-left: 22px; }\n\t\t\t\ta.chip { text-decoration: none; margin-left: 4px; }\n\t\t\t\t.notice.error, .merged { border-color: var(--firing); }\n\t\t\t\t.merged p { margin: 0 0 6px; }\n\t\t\t\tul.plain { list-style: none; padding: 0; margin: 4px 0 10px; }\n\t\t\t\tul.plain li { margin: 4px 0; }\n\t\t\t\tform.inline { display: inline; margin-left: 6px; }\n\t\t\t\t.forms { display: grid; gap: 12px; margin-top: 8px; border-top: 1px solid var(--line); padding-top: 10px; }\n\t\t\t\t.forms label { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }\n\t\t\t\t.forms input[type=text] { width: 100%; margin: 6px 0; }\n\t\t\t\tselect, input, button { font: inherit; color: var(--fg); background: var(--card); border: 1px solid var(--line); border-radius: 6px; padding: 4px 8px; max-width: 100%; }\n\t\t\t\tbutton { cursor: pointer; }\n\t\t\t\t.hint { font-size: 13px; }\n\t\t\t\t.chip.kind { font-size: 12px; margin-left: 6px; }\n\t\t\t\t.title-row { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 12px; }\n\t\t\t\t.title-row h1 { margin: 0; }\n\t\t\t\t@media (max-width: 640px) { .hide-narrow { display: none; } }\n\t\t\t</style></head><body><header><a href=\"/\">alert-agent</a></header><main>")
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
 		}
@@ -48,7 +74,7 @@ func layout(title string) templ.Component {
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
 		}
-		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 3, "</main></body></html>")
+		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 5, "</main></body></html>")
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
 		}
@@ -77,25 +103,25 @@ func statusBadge(status string) templ.Component {
 			templ_7745c5c3_ElementWriter := templ_7745c5c3_Buffer
 			templ_7745c5c3_Buffer := templ.GetBuffer()
 			var templ_7745c5c3_ElementScripts []templ.ComponentScript
-			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 4, "<span class=\"")
+			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 6, "<span class=\"")
 			if templ_7745c5c3_Err != nil {
 				return templ_7745c5c3_Err
 			}
-			var templ_7745c5c3_Var4 = []any{"status", "status-" + status}
-			templ_7745c5c3_Err = templ.RenderCSSItems(ctx, templ_7745c5c3_ElementWriter, templ_7745c5c3_Var4...)
+			var templ_7745c5c3_Var6 = []any{"status", "status-" + status}
+			templ_7745c5c3_Err = templ.RenderCSSItems(ctx, templ_7745c5c3_ElementWriter, templ_7745c5c3_Var6...)
 			if templ_7745c5c3_Err != nil {
 				return templ_7745c5c3_Err
 			}
-			var templ_7745c5c3_Var5 string
-			templ_7745c5c3_Var5, templ_7745c5c3_Err = templruntime.NewAttributeExpression(templ.CSSClasses(templ_7745c5c3_Var4).String()).Resolve(ctx)
+			var templ_7745c5c3_Var7 string
+			templ_7745c5c3_Var7, templ_7745c5c3_Err = templruntime.NewAttributeExpression(templ.CSSClasses(templ_7745c5c3_Var6).String()).Resolve(ctx)
 			if templ_7745c5c3_Err != nil {
 				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/ui/layout.templ`, Line: 1, Col: 0}
 			}
-			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var5)
+			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var7)
 			if templ_7745c5c3_Err != nil {
 				return templ_7745c5c3_Err
 			}
-			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 5, "\"")
+			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 7, "\"")
 			if templ_7745c5c3_Err != nil {
 				return templ_7745c5c3_Err
 			}
@@ -109,20 +135,20 @@ func statusBadge(status string) templ.Component {
 			}
 			templ.ReleaseBuffer(templ_7745c5c3_Buffer)
 		}
-		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 6, ">")
+		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 8, ">")
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
 		}
-		var templ_7745c5c3_Var6 string
-		templ_7745c5c3_Var6, templ_7745c5c3_Err = templ.JoinStringErrs(status)
+		var templ_7745c5c3_Var8 string
+		templ_7745c5c3_Var8, templ_7745c5c3_Err = templ.JoinStringErrs(status)
 		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/ui/layout.templ`, Line: 115, Col: 54}
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/ui/layout.templ`, Line: 110, Col: 54}
 		}
-		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var6))
+		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var8))
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
 		}
-		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 7, "</span>")
+		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 9, "</span>")
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
 		}

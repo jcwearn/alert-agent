@@ -258,9 +258,10 @@ func TestChatAPI(t *testing.T) {
 	if status := apiJSON(t, s, http.MethodPost, "/api/chat/threads/1/messages", `{"body":"   "}`, nil); status != http.StatusBadRequest {
 		t.Errorf("empty message: %d", status)
 	}
-	fs.chat().result = store.ChatEnqueue{Capped: "this conversation already had 4 agent turns in the last hour (the limit)"}
+	fs.chat().result = store.ChatEnqueue{Capped: "this conversation already had 4 agent turns in the last hour (the limit)",
+		RetryAt: time.Now().Add(20 * time.Minute)}
 	apiJSON(t, s, http.MethodPost, "/api/chat/threads/1/messages", `{"body":"again"}`, &posted)
-	if c, _ := posted["capped"].(string); !strings.HasPrefix(c, "Not processed:") {
+	if c, _ := posted["capped"].(string); !strings.HasPrefix(c, "Not processed:") || !strings.Contains(c, "Try again after") {
 		t.Errorf("capped: %v", posted)
 	}
 

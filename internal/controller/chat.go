@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
-	"net/url"
 	"strconv"
 	"strings"
 	"time"
@@ -260,7 +259,8 @@ func (s *Server) pushedFooter(ctx context.Context, run store.Run) string {
 			lines = append(lines, retitledPrefix+in.PRTitle)
 		}
 	}
-	return strings.Join(lines, "\n")
+	// Each its own paragraph: Markdown would run single lines together.
+	return strings.Join(lines, "\n\n")
 }
 
 func shortSHA(sha string) string {
@@ -268,61 +268,6 @@ func shortSHA(sha string) string {
 		return sha[:7]
 	}
 	return sha
-}
-
-// uiChat takes a message typed in the incident page's chat panel.
-func (s *Server) uiChat(w http.ResponseWriter, r *http.Request) {
-	id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
-	if err != nil {
-		http.NotFound(w, r)
-		return
-	}
-	back := func(key, val string) {
-		q := url.Values{key: {val}}
-		http.Redirect(w, r, "/incidents/"+strconv.FormatInt(id, 10)+"?"+q.Encode()+"#chat", http.StatusSeeOther)
-	}
-	body := strings.TrimSpace(r.PostFormValue("message"))
-	switch {
-	case body == "":
-		back("error", "Type a message first.")
-		return
-	case len(body) > maxChatMessage:
-		back("error", fmt.Sprintf("That message is over %d characters.", maxChatMessage))
-		return
-	}
-	ctx := r.Context()
-	th, err := s.threadForIncident(ctx, id, true)
-	if errors.Is(err, store.ErrNotFound) {
-		back("error", "No such incident.")
-		return
-	}
-	if err != nil {
-		slog.Error("loading thread for chat", "incident", id, "err", err)
-		back("error", "The controller failed to load the conversation; its error is logged.")
-		return
-	}
-	res, err := s.store.EnqueueChat(ctx, store.ChatMessage{ThreadID: th.ID, Source: store.SourceUI, Author: "you", Body: body,
-		Page: "/incidents/" + strconv.FormatInt(id, 10)}, s.chatLimits())
-	switch {
-	case errors.Is(err, store.ErrThreadArchived):
-		back("error", "This conversation is archived.")
-		return
-	case err != nil:
-		slog.Error("queueing chat", "incident", id, "err", err)
-		back("error", "The controller failed to queue that; its error is logged.")
-		return
-	case res.Capped != "":
-		back("error", cappedText(res, s.now()))
-		return
-	}
-	slog.Info("chat message queued", "incident", id, "thread", th.ID, "run", res.RunID, "new_turn", res.NewRun)
-	if res.NewRun {
-		s.metrics.runs.WithLabelValues(store.RunQueued).Inc()
-	}
-	if s.waker != nil {
-		s.waker.Wake()
-	}
-	back("msg", "Sent. The agent's reply appears below.")
 }
 
 // cappedText says why a message got no turn, and when to try again.

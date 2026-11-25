@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"net/http"
 	"net/url"
 	"os"
 	"os/signal"
@@ -28,12 +29,13 @@ import (
 	"github.com/jcwearn/alert-agent/internal/dispatch"
 	"github.com/jcwearn/alert-agent/internal/github"
 	"github.com/jcwearn/alert-agent/internal/mcptools"
+	"github.com/jcwearn/alert-agent/internal/preview"
 	"github.com/jcwearn/alert-agent/internal/proposal"
 	"github.com/jcwearn/alert-agent/internal/runner"
 	"github.com/jcwearn/alert-agent/internal/store"
 )
 
-const usage = "usage: alert-agent <controller|migrate|runner|mcp>"
+const usage = "usage: alert-agent <controller|migrate|runner|mcp|ui-preview>"
 
 func main() {
 	os.Exit(run(os.Args[1:]))
@@ -58,6 +60,8 @@ func run(args []string) int {
 		err = runRunner(ctx)
 	case "mcp":
 		err = runMCP(ctx)
+	case "ui-preview":
+		err = runPreview(ctx)
 	default:
 		fmt.Fprintln(os.Stderr, usage)
 		return 2
@@ -348,4 +352,21 @@ func envOr(key, fallback string) string {
 		return v
 	}
 	return fallback
+}
+
+// runPreview serves the UI over made-up data on localhost, for looking at
+// UI changes (and screenshotting them) without a cluster. See
+// internal/preview.
+func runPreview(ctx context.Context) error {
+	addr := envOr("PREVIEW_ADDR", "127.0.0.1:8090")
+	srv := &http.Server{Addr: addr, Handler: preview.Handler(), ReadHeaderTimeout: 5 * time.Second}
+	go func() {
+		<-ctx.Done()
+		_ = srv.Close()
+	}()
+	slog.Info("ui preview", "url", "http://"+addr)
+	if err := srv.ListenAndServe(); !errors.Is(err, http.ErrServerClosed) {
+		return err
+	}
+	return nil
 }

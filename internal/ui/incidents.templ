@@ -114,10 +114,14 @@ templ linkChips(ids []int64) {
 // and audit trail.
 templ IncidentDetail(p IncidentPage) {
 	@layout(p.Incident.AlertName) {
-		<h1>
-			@statusBadge(p.Incident.AlertStatus)
-			{ p.Incident.AlertName }
-		</h1>
+		<div class="title-row">
+			<h1>
+				@statusBadge(p.Incident.AlertStatus)
+				{ p.Incident.AlertName }
+			</h1>
+			// Hidden until the chat script loads: without it there is no chat.
+			<button type="button" hidden data-chat-incident={ strconv.FormatInt(p.Incident.ID, 10) }>Chat about this incident</button>
+		</div>
 		if p.Notice != "" {
 			<div class="card notice">{ p.Notice }</div>
 		}
@@ -197,7 +201,6 @@ templ IncidentDetail(p IncidentPage) {
 				</dl>
 			</div>
 		}
-		@chatPanel(p)
 		@related(p)
 		@runList(p.Runs)
 		<h2>Alerts ({ strconv.Itoa(len(p.Alerts)) })</h2>
