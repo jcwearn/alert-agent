@@ -1,0 +1,118 @@
+package ui
+
+import (
+	"strconv"
+
+	"github.com/jcwearn/alert-agent/internal/store"
+)
+
+func chatAuthor(m store.ChatMessage) string {
+	switch m.Source {
+	case store.SourceAgent:
+		return "Agent"
+	case store.SourceGitHub:
+		return "@" + m.Author + " on GitHub"
+	default:
+		return "You, in the UI"
+	}
+}
+
+func chatNote(m store.ChatMessage) string {
+	switch m.Status {
+	case store.ChatCapped:
+		return "not processed: over the turn limit"
+	case store.ChatFailed:
+		return "the turn failed"
+	case store.ChatQueued:
+		return "waiting for the agent"
+	}
+	return ""
+}
+
+// chatPanel is the conversation on an agent PR: the reviewer's messages from
+// the UI and GitHub, the agent's replies, the turn in progress, and a box to
+// write in. A turn in progress streams its steps over SSE.
+templ chatPanel(p IncidentPage) {
+	<h2 id="chat">Chat with the agent</h2>
+	<div class="chat">
+		if len(p.Chat) == 0 {
+			<p class="muted hint">
+				Ask the agent about this PR, or ask it to change something: it continues the session that opened the PR,
+				and a change becomes a new commit on the same branch.
+			</p>
+		}
+		for _, m := range p.Chat {
+			<div class={ "msg", templ.KV("msg-agent", m.Source == store.SourceAgent) }>
+				<div class="msg-meta">
+					{ chatAuthor(m) } · { stamp(m.CreatedAt) }
+					if m.RunID != nil && m.Source == store.SourceAgent {
+						· <a href={ runURL(*m.RunID) }>run #{ strconv.FormatInt(*m.RunID, 10) }</a>
+					}
+					if m.HTMLURL != "" {
+						· <a href={ templ.URL(m.HTMLURL) } rel="noreferrer">comment</a>
+					}
+					if n := chatNote(m); n != "" {
+						· { n }
+					}
+				</div>
+				if m.Path != "" {
+					<div class="msg-meta mono">
+						{ m.Path }
+						if m.Line != nil {
+							:{ strconv.Itoa(*m.Line) }
+						}
+					</div>
+				}
+				if m.Source == store.SourceAgent {
+					<div class="md">
+						@markdown(m.Body)
+					</div>
+				} else {
+					<div class="msg-body">{ m.Body }</div>
+				}
+			</div>
+		}
+		if r := p.ChatRun; r != nil {
+			<div class="msg msg-agent live" id="live" data-run={ strconv.FormatInt(r.ID, 10) }>
+				<div class="msg-meta">
+					Agent · <a href={ runURL(r.ID) }>run #{ strconv.FormatInt(r.ID, 10) }</a> ·
+					<span id="live-status">{ r.Status }</span>
+				</div>
+				<div id="live-steps"></div>
+			</div>
+			<script>
+				(function () {
+					var box = document.getElementById("live");
+					if (!box || !window.EventSource) { return; }
+					var steps = document.getElementById("live-steps");
+					var status = document.getElementById("live-status");
+					var es = new EventSource("/runs/" + box.dataset.run + "/stream");
+					es.addEventListener("item", function (e) {
+						var it = JSON.parse(e.data);
+						var line = "";
+						if (it.kind === "text") { line = it.body; }
+						else if (it.kind === "tool") { line = "→ " + it.title; }
+						else if (it.kind === "result") { line = (it.is_error ? "  error · " : "  output · ") + it.title; }
+						else if (it.title) { line = it.title; }
+						if (!line) { return; }
+						var d = document.createElement("div");
+						d.className = "step";
+						d.textContent = line;
+						steps.appendChild(d);
+					});
+					es.addEventListener("status", function (e) { status.textContent = JSON.parse(e.data); });
+					es.addEventListener("done", function () { es.close(); window.location.reload(); });
+				})();
+			</script>
+		}
+		if p.ChatEnabled {
+			<form method="post" action={ templ.SafeURL("/incidents/" + strconv.FormatInt(p.Incident.ID, 10) + "/chat") }>
+				<textarea name="message" required maxlength="8000" placeholder="Why this limit? / Make it 512Mi instead."></textarea>
+				<button type="submit">Send</button>
+				<span class="muted hint">One turn at a time; messages sent while a turn waits join it.</span>
+			</form>
+		} else if p.PR != nil {
+			<p class="muted hint">The PR is { p.PR.State }; the conversation is closed.</p>
+		}
+	</div>
+}

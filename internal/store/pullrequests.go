@@ -181,6 +181,29 @@ func (s *Store) PullRequestForIncident(ctx context.Context, incidentID int64) (P
 	return p, err
 }
 
+// GetPullRequest returns one PR by its row id, or ErrNotFound.
+func (s *Store) GetPullRequest(ctx context.Context, id int64) (PullRequest, error) {
+	p, err := scanPR(s.pool.QueryRow(ctx, `SELECT `+prColumns+prFrom+` WHERE p.id = $1`, id))
+	if errors.Is(err, pgx.ErrNoRows) {
+		return PullRequest{}, ErrNotFound
+	}
+	return p, err
+}
+
+// UpdatePullRequestHead records a new commit the controller pushed to the PR
+// branch, and the files the PR now changes (the overlap guard reads them).
+// Checks go back to pending for the new head. It returns false if the head
+// moved since fromSHA, which the push would have refused anyway.
+func (s *Store) UpdatePullRequestHead(ctx context.Context, id int64, fromSHA, headSHA string, files []string) (bool, error) {
+	tag, err := s.pool.Exec(ctx, `
+		UPDATE pull_requests SET head_sha = $3, files = $4, checks = 'pending', updated_at = now()
+		WHERE id = $1 AND head_sha = $2`, id, fromSHA, headSHA, nonNilSlice(files))
+	if err != nil {
+		return false, err
+	}
+	return tag.RowsAffected() == 1, nil
+}
+
 // OpenPullRequests lists PRs still awaiting review, oldest first.
 func (s *Store) OpenPullRequests(ctx context.Context) ([]PullRequest, error) {
 	rows, err := s.pool.Query(ctx, `SELECT `+prColumns+prFrom+` WHERE p.state = 'open' ORDER BY p.created_at`)

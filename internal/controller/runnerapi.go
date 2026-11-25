@@ -27,6 +27,7 @@ func (s *Server) RunnerHandler() http.Handler {
 	mux.HandleFunc("POST "+runnerapi.PathEvents, s.runnerAuth(s.runnerEvents))
 	mux.HandleFunc("POST "+runnerapi.PathFinish, s.runnerAuth(s.runnerFinish))
 	mux.HandleFunc("POST "+runnerapi.PathSession, s.runnerAuth(s.runnerSession))
+	mux.HandleFunc("GET "+runnerapi.PathSession, s.runnerAuth(s.runnerResumeSession))
 	mcpHandler := s.mcpHandler()
 	mux.Handle(runnerapi.PathMCP, s.runnerAuth(mcpHandler.ServeHTTP))
 	return mux
@@ -74,7 +75,11 @@ func (s *Server) buildContext(ctx context.Context, run store.Run) (runnerapi.Con
 	if err != nil {
 		return runnerapi.Context{}, err
 	}
+	if run.Kind == store.KindChat {
+		return s.chatContext(ctx, run, in)
+	}
 	rc := runnerapi.Context{
+		Kind:        runnerapi.KindDiagnose,
 		RunID:       run.ID,
 		SessionID:   run.SessionID,
 		Model:       run.Model,
@@ -271,6 +276,14 @@ func (s *Server) RunFinished(runID int64) {
 		return
 	}
 	s.metrics.runs.WithLabelValues(run.Status).Inc()
+	// A chat turn's outcome is its reply in the conversation, not a diagnosis.
+	if run.Kind == store.KindChat {
+		s.chatTurnFinished(ctx, run)
+		if s.waker != nil {
+			s.waker.Wake()
+		}
+		return
+	}
 	if s.notifier != nil {
 		in, _, err := s.store.GetIncident(ctx, run.IncidentID)
 		switch {

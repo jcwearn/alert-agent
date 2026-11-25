@@ -89,6 +89,16 @@ templ layout(title string) {
 				select, input, button { font: inherit; color: var(--fg); background: var(--card); border: 1px solid var(--line); border-radius: 6px; padding: 4px 8px; max-width: 100%; }
 				button { cursor: pointer; }
 				.hint { font-size: 13px; }
+				.chat { display: grid; gap: 8px; }
+				.msg { border: 1px solid var(--line); border-radius: 8px; padding: 8px 12px; background: var(--card); }
+				.msg-agent { border-left: 3px solid var(--resolved); }
+				.msg-meta { font-size: 13px; color: var(--muted); margin-bottom: 4px; }
+				.msg-body { white-space: pre-wrap; overflow-wrap: anywhere; }
+				.msg pre.hunk { margin: 4px 0; font: 12px/1.4 ui-monospace, monospace; white-space: pre-wrap; color: var(--muted); }
+				.live { border-style: dashed; }
+				.live .step { font-size: 13px; margin: 2px 0; white-space: pre-wrap; overflow-wrap: anywhere; }
+				.chat form textarea { width: 100%; min-height: 80px; font: inherit; color: var(--fg); background: var(--card); border: 1px solid var(--line); border-radius: 6px; padding: 6px 8px; }
+				.chip.kind { font-size: 12px; margin-left: 6px; }
 				@media (max-width: 640px) { .hide-narrow { display: none; } }
 			</style>
 		</head>

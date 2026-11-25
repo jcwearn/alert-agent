@@ -19,6 +19,14 @@ const (
 	RunSkipped   = "skipped"
 )
 
+// Run kinds.
+const (
+	KindDiagnose = "diagnose"
+	// KindChat is a reviewer's turn on an agent PR: it resumes the PR run's
+	// session on the PR branch.
+	KindChat = "chat"
+)
+
 // Run is one agent attempt at an incident.
 type Run struct {
 	ID         int64
@@ -34,6 +42,9 @@ type Run struct {
 	Error      string
 	NumTurns   *int
 	DurationMS *int64
+	Kind       string
+	// PRID is the PR a chat turn is about.
+	PRID *int64
 }
 
 // RunEvent is one line of a run's transcript.
@@ -55,12 +66,12 @@ type RunResult struct {
 }
 
 const runColumns = `id, incident_id, status, session_id::text, job_name, model, created_at,
-	started_at, finished_at, report, error, num_turns, duration_ms`
+	started_at, finished_at, report, error, num_turns, duration_ms, kind, pr_id`
 
 func scanRun(row pgx.Row) (Run, error) {
 	var r Run
 	err := row.Scan(&r.ID, &r.IncidentID, &r.Status, &r.SessionID, &r.JobName, &r.Model, &r.CreatedAt,
-		&r.StartedAt, &r.FinishedAt, &r.Report, &r.Error, &r.NumTurns, &r.DurationMS)
+		&r.StartedAt, &r.FinishedAt, &r.Report, &r.Error, &r.NumTurns, &r.DurationMS, &r.Kind, &r.PRID)
 	return r, err
 }
 
@@ -124,6 +135,10 @@ const liveMember = `EXISTS (SELECT 1 FROM run_incidents ri JOIN incidents i ON i
 // needs the agent but another of its incidents does, that one becomes the
 // primary.
 //
+// Chat turns go first: a reviewer is waiting on them, and a new alert's run
+// can wait a turn. Chat runs keep their incident and are skipped only when
+// their PR is no longer open.
+//
 // It returns false when nothing is ready, or when a run is already running
 // (the runs_one_running index refuses a second one).
 func (s *Store) ClaimNextRun(ctx context.Context, tokenHash []byte, jobPrefix, model string) (Run, bool, error) {
@@ -134,9 +149,22 @@ func (s *Store) ClaimNextRun(ctx context.Context, tokenHash []byte, jobPrefix, m
 		if _, err := tx.Exec(ctx, `
 			UPDATE runs r SET status = 'skipped', finished_at = now(),
 				error = 'every incident resolved or was merged before the agent started'
-			WHERE r.status = 'queued' AND NOT `+liveMember,
+			WHERE r.status = 'queued' AND r.kind = 'diagnose' AND NOT `+liveMember,
 		); err != nil {
 			return fmt.Errorf("skip resolved: %w", err)
+		}
+		// A chat turn outlives its alert (PRs are reviewed after the fact),
+		// but not its PR.
+		if _, err := tx.Exec(ctx, `
+			WITH skipped AS (
+				UPDATE runs r SET status = 'skipped', finished_at = now(),
+					error = 'the PR was merged or closed before the turn started'
+				WHERE r.status = 'queued' AND r.kind = 'chat'
+					AND NOT EXISTS (SELECT 1 FROM pull_requests p WHERE p.id = r.pr_id AND p.state = 'open')
+				RETURNING r.id)
+			UPDATE chat_messages SET status = 'failed' WHERE run_id IN (SELECT id FROM skipped)`,
+		); err != nil {
+			return fmt.Errorf("skip closed-PR chats: %w", err)
 		}
 
 		var running bool
@@ -151,16 +179,16 @@ func (s *Store) ClaimNextRun(ctx context.Context, tokenHash []byte, jobPrefix, m
 		row := tx.QueryRow(ctx, `
 			UPDATE runs SET status = 'running', started_at = now(), token_hash = $1,
 				job_name = $2 || id::text, model = $3,
-				incident_id = COALESCE((
+				incident_id = CASE WHEN kind = 'chat' THEN incident_id ELSE COALESCE((
 					SELECT i.id FROM incidents i
 					WHERE i.id = runs.incident_id AND i.alert_status = 'firing' AND i.parent_id IS NULL
 				), (
 					SELECT min(i.id) FROM run_incidents ri JOIN incidents i ON i.id = ri.incident_id
 					WHERE ri.run_id = runs.id AND i.alert_status = 'firing' AND i.parent_id IS NULL
-				), runs.incident_id)
+				), runs.incident_id) END
 			WHERE id = (
 				SELECT id FROM runs WHERE status = 'queued' AND (hold_until IS NULL OR hold_until <= now())
-				ORDER BY id LIMIT 1 FOR UPDATE SKIP LOCKED
+				ORDER BY kind = 'chat' DESC, id LIMIT 1 FOR UPDATE SKIP LOCKED
 			)
 			RETURNING `+runColumns, tokenHash, jobPrefix, model)
 		r, err := scanRun(row)
@@ -297,21 +325,5 @@ func (s *Store) ListRuns(ctx context.Context, incidentID int64) ([]Run, error) {
 
 // RunEvents returns a run's transcript in order.
 func (s *Store) RunEvents(ctx context.Context, runID int64) ([]RunEvent, error) {
-	rows, err := s.pool.Query(ctx,
-		`SELECT seq, type, payload, received_at FROM run_events WHERE run_id = $1 ORDER BY seq`, runID)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	var out []RunEvent
-	for rows.Next() {
-		var e RunEvent
-		var payload []byte
-		if err := rows.Scan(&e.Seq, &e.Type, &payload, &e.ReceivedAt); err != nil {
-			return nil, err
-		}
-		e.Payload = payload
-		out = append(out, e)
-	}
-	return out, rows.Err()
+	return s.RunEventsAfter(ctx, runID, -1)
 }

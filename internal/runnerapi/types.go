@@ -16,8 +16,17 @@ const (
 	// PathMCP serves the controller's MCP tools (propose_pr) over streamable
 	// HTTP, authenticated by the same run token.
 	PathMCP = "/runner/v1/mcp"
-	// PathSession takes the run's gzipped claude session file.
+	// PathSession takes the run's gzipped claude session file (POST), and
+	// gives a chat turn the session it resumes (GET).
 	PathSession = "/runner/v1/session"
+)
+
+// Run kinds.
+const (
+	KindDiagnose = "diagnose"
+	// KindChat resumes the PR run's session on the PR branch to answer the
+	// reviewer.
+	KindChat = "chat"
 )
 
 // Context is everything a runner needs to start.
@@ -32,9 +41,17 @@ type Context struct {
 	ProposePR bool `json:"propose_pr"`
 	// Consolidate says the controller serves link_incident and
 	// merge_incident for this run.
-	Consolidate bool     `json:"consolidate"`
-	Incident    Incident `json:"incident"`
-	Alerts      []Alert  `json:"alerts"`
+	Consolidate bool `json:"consolidate"`
+	// Kind is diagnose, or chat for a reviewer's turn on a PR.
+	Kind string `json:"kind"`
+	// UpdatePR says the controller serves update_pr (chat turns).
+	UpdatePR bool `json:"update_pr"`
+	// PR is the PR a chat turn is about.
+	PR *PR `json:"pr,omitempty"`
+	// Messages are the reviewer's messages a chat turn answers.
+	Messages []ChatMessage `json:"messages,omitempty"`
+	Incident Incident      `json:"incident"`
+	Alerts   []Alert       `json:"alerts"`
 	// Batch is the run's other incidents: they opened in the same namespace
 	// while the run was held, and this run decides what they are.
 	Batch []BatchIncident `json:"batch,omitempty"`
@@ -109,4 +126,31 @@ type Finish struct {
 	NumTurns   *int            `json:"num_turns,omitempty"`
 	DurationMS *int64          `json:"duration_ms,omitempty"`
 	Usage      json.RawMessage `json:"usage,omitempty"`
+}
+
+// PR is the agent PR a chat turn works on. The runner checks out Branch,
+// which is at HeadSHA.
+type PR struct {
+	Number  int      `json:"number"`
+	URL     string   `json:"url"`
+	Title   string   `json:"title"`
+	Branch  string   `json:"branch"`
+	HeadSHA string   `json:"head_sha"`
+	Files   []string `json:"files"`
+	State   string   `json:"state"`
+	Checks  string   `json:"checks"`
+}
+
+// ChatMessage is one reviewer message, from the UI or a GitHub comment.
+type ChatMessage struct {
+	Source string    `json:"source"` // ui or github
+	Author string    `json:"author"`
+	Body   string    `json:"body"`
+	At     time.Time `json:"at"`
+	// Kind is the GitHub comment kind (issue_comment, review_comment, review).
+	Kind string `json:"kind,omitempty"`
+	// A line comment's file, line and the diff it was made on.
+	Path     string `json:"path,omitempty"`
+	Line     *int   `json:"line,omitempty"`
+	DiffHunk string `json:"diff_hunk,omitempty"`
 }

@@ -44,7 +44,12 @@ templ runList(runs []store.Run) {
 				<tbody>
 					for _, r := range runs {
 						<tr>
-							<td><a href={ runURL(r.ID) }>#{ strconv.FormatInt(r.ID, 10) }</a></td>
+							<td>
+								<a href={ runURL(r.ID) }>#{ strconv.FormatInt(r.ID, 10) }</a>
+								if r.Kind == store.KindChat {
+									<span class="chip kind">chat</span>
+								}
+							</td>
 							<td>
 								@statusBadge(r.Status)
 							</td>
@@ -61,7 +66,7 @@ templ runList(runs []store.Run) {
 			</table>
 		</div>
 		for _, r := range runs {
-			if r.Status == store.RunSucceeded && r.Report != "" {
+			if r.Kind != store.KindChat && r.Status == store.RunSucceeded && r.Report != "" {
 				<h2>Latest report</h2>
 				<div class="card report md">
 					@markdown(r.Report)
@@ -78,6 +83,9 @@ templ RunDetail(in store.Incident, run store.Run, covers []int64, items []Transc
 		<h1>
 			@statusBadge(run.Status)
 			Run #{ strconv.FormatInt(run.ID, 10) }
+			if run.Kind == store.KindChat {
+				<span class="chip kind">chat turn</span>
+			}
 		</h1>
 		<div class="card">
 			<dl>
@@ -118,7 +126,11 @@ templ RunDetail(in store.Incident, run store.Run, covers []int64, items []Transc
 			<div class="card report error">{ run.Error }</div>
 		}
 		if run.Report != "" {
-			<h2>Report</h2>
+			if run.Kind == store.KindChat {
+				<h2>Reply</h2>
+			} else {
+				<h2>Report</h2>
+			}
 			<div class="card report md">
 				@markdown(run.Report)
 			</div>

@@ -83,15 +83,28 @@ func Run(ctx context.Context, cfg Config) error {
 	}
 	slog.Info("run starting", "run", rc.RunID, "incident", rc.Incident.ID, "alert", rc.Incident.AlertName)
 
-	if err := clone(ctx, cfg); err != nil {
+	branch, prompt := "main", userPrompt(rc)
+	if rc.Kind == runnerapi.KindChat {
+		if rc.PR == nil {
+			return api.fail(ctx, "chat turn without a PR")
+		}
+		// The turn continues the conversation that opened the PR; without its
+		// session there is nothing to continue.
+		if err := restoreSession(ctx, api, cfg.Getenv("HOME"), cfg.WorkDir, rc.SessionID); err != nil {
+			return api.fail(ctx, "could not restore the PR's session: "+err.Error())
+		}
+		branch, prompt = rc.PR.Branch, chatPrompt(rc)
+	}
+
+	if err := clone(ctx, cfg, branch); err != nil {
 		return api.fail(ctx, "checkout failed: "+err.Error())
 	}
 
-	settings, err := settingsJSON(rc.ProposePR, rc.Consolidate)
+	settings, err := settingsJSON(rc.ProposePR, rc.Consolidate, rc.UpdatePR)
 	if err != nil {
 		return api.fail(ctx, err.Error())
 	}
-	mcpConfig, err := mcpConfigJSON(cfg.SelfBin, cfg.WorkDir, cfg.Getenv, cfg.ControllerURL, cfg.RunToken, rc.ProposePR || rc.Consolidate)
+	mcpConfig, err := mcpConfigJSON(cfg.SelfBin, cfg.WorkDir, cfg.Getenv, cfg.ControllerURL, cfg.RunToken, rc.ProposePR || rc.Consolidate || rc.UpdatePR)
 	if err != nil {
 		return api.fail(ctx, err.Error())
 	}
@@ -101,7 +114,7 @@ func Run(ctx context.Context, cfg Config) error {
 	}
 	defer func() { _ = os.Remove(mcpFile) }()
 
-	cmd := exec.CommandContext(ctx, cfg.ClaudeBin, claudeArgs(rc, settings, mcpFile, userPrompt(rc))...)
+	cmd := exec.CommandContext(ctx, cfg.ClaudeBin, claudeArgs(rc, settings, mcpFile, prompt)...)
 	cmd.Dir = cfg.WorkDir
 	cmd.Env = claudeEnv(cfg.Getenv)
 	var stderr bytes.Buffer
@@ -205,13 +218,57 @@ func uploadSession(ctx context.Context, api *client, home, sessionID string) err
 	return api.session(ctx, buf.Bytes())
 }
 
-// clone checks out the repo's main branch. The token travels as an HTTP
-// header through git's environment-supplied config, so it never appears in
-// argv, in .git/config, or in the remote URL the agent can read later.
-func clone(ctx context.Context, cfg Config) error {
+// projectDir is the directory claude keeps a working directory's sessions
+// in, under $HOME/.claude/projects: the path with every '/', '_' and '.'
+// replaced by '-' (so /work/repo is -work-repo).
+func projectDir(workDir string) string {
+	return strings.NewReplacer("/", "-", "_", "-", ".", "-").Replace(workDir)
+}
+
+// restoreSession writes the PR's session file where claude looks for it, so
+// `claude --resume <id>` in the same working directory continues it.
+func restoreSession(ctx context.Context, api *client, home, workDir, sessionID string) error {
+	if home == "" || sessionID == "" || strings.ContainsAny(sessionID, "/.") {
+		return errors.New("no HOME or a bad session id")
+	}
+	gz, err := api.resumeSession(ctx)
+	if err != nil {
+		return err
+	}
+	zr, err := gzip.NewReader(bytes.NewReader(gz))
+	if err != nil {
+		return fmt.Errorf("session is not gzip: %w", err)
+	}
+	dir := filepath.Join(home, ".claude", "projects", projectDir(workDir))
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return err
+	}
+	f, err := os.OpenFile(filepath.Join(dir, sessionID+".jsonl"), os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600)
+	if err != nil {
+		return err
+	}
+	n, err := io.Copy(f, io.LimitReader(zr, maxSessionRaw+1))
+	if cerr := f.Close(); err == nil {
+		err = cerr
+	}
+	if err == nil && n > maxSessionRaw {
+		err = fmt.Errorf("session is over %d bytes uncompressed", maxSessionRaw)
+	}
+	return err
+}
+
+// maxSessionRaw bounds a restored session, uncompressed, as the controller
+// does on upload.
+const maxSessionRaw = 256 << 20
+
+// clone checks out one branch of the repo: main, or a chat turn's PR branch.
+// The token travels as an HTTP header through git's environment-supplied
+// config, so it never appears in argv, in .git/config, or in the remote URL
+// the agent can read later.
+func clone(ctx context.Context, cfg Config, branch string) error {
 	url := "https://github.com/" + cfg.Repo + ".git"
 	cmd := exec.CommandContext(ctx, cfg.GitBin, "clone", "--quiet", "--depth", "50",
-		"--single-branch", "--branch", "main", url, cfg.WorkDir)
+		"--single-branch", "--branch", branch, url, cfg.WorkDir)
 	cmd.Env = []string{
 		"PATH=" + cfg.Getenv("PATH"),
 		"HOME=" + cfg.Getenv("HOME"),

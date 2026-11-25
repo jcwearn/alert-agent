@@ -241,3 +241,118 @@ func TestCheckPath(t *testing.T) {
 		}
 	}
 }
+
+// openedPR pushes agent/5 as propose_pr would, and checks the working clone
+// out on it, as a chat turn's runner would.
+func openedPR(t *testing.T) (cfg Config, remote, work string, pr *Commit) {
+	t.Helper()
+	cfg, remote, work = fixture(t)
+	patch := edit(t, work, "apps/web/deployment.yaml", "memory: 256Mi\ncpu: 100m\n")
+	pr, err := Prepare(t.Context(), cfg, "", Request{IncidentID: 5, Title: "fix(web): raise memory limit", Patch: patch})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(pr.Close)
+	if err := pr.Push(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	run(t, work, "fetch", "--quiet", "origin", "agent/5")
+	run(t, work, "checkout", "--quiet", "-b", "agent/5", "FETCH_HEAD")
+	return cfg, remote, work, pr
+}
+
+func updateReq(pr *Commit, title, patch string) UpdateRequest {
+	return UpdateRequest{IncidentID: 5, Branch: "agent/5", HeadSHA: pr.HeadSHA, BaseSHA: pr.BaseSHA,
+		Files: pr.Files, Title: title, Patch: patch}
+}
+
+func TestPrepareUpdateFastForwards(t *testing.T) {
+	cfg, remote, work, pr := openedPR(t)
+	write(t, filepath.Join(work, filepath.FromSlash("apps/web/extra.yaml")), "a: b\n", 0o644)
+	patch := edit(t, work, "apps/web/deployment.yaml", "memory: 512Mi\ncpu: 100m\n")
+
+	c, err := PrepareUpdate(t.Context(), cfg, "", updateReq(pr, "fix(web): use 512Mi instead", patch))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(c.Close)
+	if c.ParentSHA != pr.HeadSHA || c.HeadSHA == pr.HeadSHA {
+		t.Fatalf("parent %s head %s, PR head %s", c.ParentSHA, c.HeadSHA, pr.HeadSHA)
+	}
+	if strings.Join(c.Files, ",") != "apps/web/deployment.yaml,apps/web/extra.yaml" {
+		t.Errorf("PR files = %v, want both files against the base", c.Files)
+	}
+	if err := c.Push(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	if got := strings.TrimSpace(run(t, remote, "rev-parse", "agent/5")); got != c.HeadSHA {
+		t.Errorf("agent/5 at %s, want %s", got, c.HeadSHA)
+	}
+	if got := strings.TrimSpace(run(t, remote, "rev-parse", "agent/5^")); got != pr.HeadSHA {
+		t.Errorf("new commit's parent is %s, want the old head %s", got, pr.HeadSHA)
+	}
+	if got := run(t, remote, "show", "agent/5:apps/web/deployment.yaml"); got != "memory: 512Mi\ncpu: 100m\n" {
+		t.Errorf("content = %q", got)
+	}
+	msg := run(t, remote, "log", "-1", "--format=%B", "agent/5")
+	if !strings.HasPrefix(msg, "fix(web): use 512Mi instead\n\nProposed by the alert agent for incident #5.") {
+		t.Errorf("commit message = %q", msg)
+	}
+}
+
+func TestPrepareUpdateRefusals(t *testing.T) {
+	cfg, remote, work, pr := openedPR(t)
+	ctx := t.Context()
+
+	// The same checks as a new PR: a path outside apps/ and infrastructure/,
+	// and the hooks.
+	bad := edit(t, work, "scripts/render.sh", "#!/bin/sh\nexit 0\n")
+	var rej *Rejected
+	if _, err := PrepareUpdate(ctx, cfg, "", updateReq(pr, "fix(web): x", bad)); !errors.As(err, &rej) {
+		t.Errorf("scripts/ change: %v, want a refusal", err)
+	}
+	forbidden := edit(t, work, "apps/web/deployment.yaml", "memory: FORBIDDEN\n")
+	if _, err := PrepareUpdate(ctx, cfg, "", updateReq(pr, "fix(web): x", forbidden)); !errors.As(err, &rej) || !strings.Contains(rej.Reason, "hooks") {
+		t.Errorf("hook failure: %v", err)
+	}
+	if _, err := PrepareUpdate(ctx, cfg, "", UpdateRequest{IncidentID: 5, Branch: "main", Title: "fix(web): x", Patch: forbidden}); err == nil {
+		t.Error("an update outside the incident's agent branch was accepted")
+	}
+
+	// Someone pushes to the branch: the recorded head is stale.
+	other := filepath.Join(t.TempDir(), "other")
+	run(t, filepath.Dir(other), "clone", "--quiet", "--branch", "agent/5", remote, other)
+	write(t, filepath.Join(other, filepath.FromSlash("apps/web/deployment.yaml")), "memory: 300Mi\ncpu: 100m\n", 0o644)
+	run(t, other, "commit", "--quiet", "-am", "by hand")
+	run(t, other, "push", "--quiet", "origin", "agent/5")
+	patch := edit(t, work, "apps/web/deployment.yaml", "memory: 512Mi\ncpu: 100m\n")
+	if _, err := PrepareUpdate(ctx, cfg, "", updateReq(pr, "fix(web): 512Mi", patch)); !errors.As(err, &rej) || !strings.Contains(rej.Reason, "moved") {
+		t.Errorf("moved branch: %v", err)
+	}
+}
+
+func TestUpdatePushNeverForces(t *testing.T) {
+	cfg, remote, work, pr := openedPR(t)
+	patch := edit(t, work, "apps/web/deployment.yaml", "memory: 512Mi\ncpu: 100m\n")
+	c, err := PrepareUpdate(t.Context(), cfg, "", updateReq(pr, "fix(web): 512Mi", patch))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(c.Close)
+
+	// The branch moves between the clone and the push.
+	other := filepath.Join(t.TempDir(), "other")
+	run(t, filepath.Dir(other), "clone", "--quiet", "--branch", "agent/5", remote, other)
+	write(t, filepath.Join(other, filepath.FromSlash("apps/web/extra.yaml")), "x: y\n", 0o644)
+	run(t, other, "add", "-A")
+	run(t, other, "commit", "--quiet", "-m", "by hand")
+	run(t, other, "push", "--quiet", "origin", "agent/5")
+	moved := strings.TrimSpace(run(t, remote, "rev-parse", "agent/5"))
+
+	if err := c.Push(t.Context()); err == nil {
+		t.Fatal("a non-fast-forward update was pushed")
+	}
+	if got := strings.TrimSpace(run(t, remote, "rev-parse", "agent/5")); got != moved {
+		t.Errorf("agent/5 overwritten: %s, want %s", got, moved)
+	}
+}
