@@ -43,6 +43,7 @@ type Config struct {
 // Store is what the dispatcher needs from persistence.
 type Store interface {
 	ClaimNextRun(ctx context.Context, tokenHash []byte, jobPrefix, model string) (store.Run, bool, error)
+	ClaimNextChatRun(ctx context.Context, tokenHash []byte, jobPrefix, model string) (store.Run, bool, error)
 	RunningRun(ctx context.Context) (store.Run, bool, error)
 	RunsStartedSince(ctx context.Context, t time.Time) (int, error)
 	FinishRun(ctx context.Context, runID int64, res store.RunResult) (bool, error)
@@ -117,24 +118,28 @@ func (d *Dispatcher) Tick(ctx context.Context) error {
 		return d.checkRunning(ctx, running)
 	}
 
+	// MaxRunsPerHour caps alert runs. Chat turns are budgeted when their
+	// message arrives, so they still start when alert runs must wait.
 	started, err := d.store.RunsStartedSince(ctx, d.now().Add(-time.Hour))
 	if err != nil {
 		return err
 	}
+	claim := d.store.ClaimNextRun
 	if started >= d.cfg.MaxRunsPerHour {
 		if !d.capped {
-			slog.Warn("hourly run cap reached; queued runs wait", "cap", d.cfg.MaxRunsPerHour)
+			slog.Warn("hourly alert run cap reached; queued alert runs wait", "cap", d.cfg.MaxRunsPerHour)
 			d.capped = true
 		}
-		return nil
+		claim = d.store.ClaimNextChatRun
+	} else {
+		d.capped = false
 	}
-	d.capped = false
 
 	token, hash, err := newRunToken()
 	if err != nil {
 		return err
 	}
-	run, ok, err := d.store.ClaimNextRun(ctx, hash, JobPrefix, d.cfg.Model)
+	run, ok, err := claim(ctx, hash, JobPrefix, d.cfg.Model)
 	if err != nil || !ok {
 		return err
 	}

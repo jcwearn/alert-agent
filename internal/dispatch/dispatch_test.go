@@ -36,6 +36,13 @@ func (f *fakeStore) ClaimNextRun(_ context.Context, hash []byte, prefix, model s
 	return r, true, nil
 }
 
+func (f *fakeStore) ClaimNextChatRun(ctx context.Context, hash []byte, prefix, model string) (store.Run, bool, error) {
+	if len(f.queued) == 0 || f.queued[0].Kind != store.KindChat {
+		return store.Run{}, false, nil
+	}
+	return f.ClaimNextRun(ctx, hash, prefix, model)
+}
+
 func (f *fakeStore) RunningRun(context.Context) (store.Run, bool, error) {
 	if f.running == nil {
 		return store.Run{}, false, nil
@@ -144,6 +151,15 @@ func TestTickRespectsHourlyCap(t *testing.T) {
 	}
 	if st.running != nil {
 		t.Fatal("run started past the hourly cap")
+	}
+
+	// A chat turn has its own budget and still starts.
+	st.queued = []store.Run{{ID: 8, Kind: store.KindChat}}
+	if err := d.Tick(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	if st.running == nil || st.running.ID != 8 {
+		t.Fatalf("chat turn not started under a full alert cap: %+v", st.running)
 	}
 }
 

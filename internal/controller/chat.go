@@ -198,7 +198,7 @@ func (s *Server) updatePR(ctx context.Context, run store.Run, in UpdateInput) (s
 
 // chatLimits are the caps a new turn is checked against.
 func (s *Server) chatLimits() store.ChatLimits {
-	return store.ChatLimits{PerPRHour: s.opts.ChatMaxPerPRHour, GlobalHour: s.opts.MaxRunsPerHour}
+	return store.ChatLimits{PerPRHour: s.opts.ChatMaxPerPRHour, AllHour: s.opts.ChatMaxPerHour}
 }
 
 // chatTurnFinished records the agent's reply to the turn's messages, with a
