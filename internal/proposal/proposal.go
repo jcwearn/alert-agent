@@ -42,16 +42,36 @@ type Request struct {
 	Patch      string
 }
 
+// UpdateRequest is a further commit on an open PR's branch.
+type UpdateRequest struct {
+	IncidentID int64
+	Branch     string
+	// HeadSHA is the branch head the controller recorded; the branch must
+	// still be there, or the agent's patch was made against something else.
+	HeadSHA string
+	// BaseSHA is the main commit the PR started from, for its file list.
+	BaseSHA string
+	// Files the PR changed before this commit, the fallback file list.
+	Files []string
+	Title string
+	Patch string
+}
+
 // Commit is a validated commit, ready to push.
 type Commit struct {
 	Branch  string
 	BaseSHA string
 	HeadSHA string
-	Files   []string
+	// Files are the files the commit changes; for an update, every file the
+	// PR now changes against its base.
+	Files []string
+	// ParentSHA is the branch head an update was committed on.
+	ParentSHA string
 
-	dir  string
-	cfg  Config
-	auth string
+	dir    string
+	cfg    Config
+	auth   string
+	update bool
 }
 
 // Close removes the clone.
@@ -116,17 +136,108 @@ func (c *Commit) prepare(ctx context.Context, req Request) error {
 	if _, err := c.git(ctx, repoDir, "checkout", "--quiet", "-b", c.Branch); err != nil {
 		return err
 	}
+	return c.applyAndCommit(ctx, repoDir, req.Title, req.Patch, req.IncidentID, "the current main ("+short(c.BaseSHA)+")")
+}
 
+// PrepareUpdate clones an open PR's branch, applies the patch on its head,
+// and commits through the same checks and hooks as Prepare. Push then
+// fast-forwards the branch, so a commit pushed by anyone else in the
+// meantime is never overwritten.
+//
+// The hooks are the branch's, which are main's as of the PR's base: the
+// agent can never change .githooks or scripts.
+func PrepareUpdate(ctx context.Context, cfg Config, token string, req UpdateRequest) (*Commit, error) {
+	if err := CheckTitle(req.Title); err != nil {
+		return nil, err
+	}
+	if err := CheckPatch(req.Patch); err != nil {
+		return nil, err
+	}
+	if !strings.HasPrefix(req.Branch, BranchPrefix) || req.Branch != BranchName(req.IncidentID) {
+		return nil, fmt.Errorf("refusing to update %q: not the incident's agent branch", req.Branch)
+	}
+	if err := os.MkdirAll(cfg.WorkDir, 0o700); err != nil {
+		return nil, err
+	}
+	dir, err := os.MkdirTemp(cfg.WorkDir, "update-")
+	if err != nil {
+		return nil, err
+	}
+	c := &Commit{dir: dir, cfg: cfg, Branch: req.Branch, BaseSHA: req.BaseSHA, update: true}
+	if token != "" {
+		c.auth = base64.StdEncoding.EncodeToString([]byte("x-access-token:" + token))
+	}
+	if err := c.prepareUpdate(ctx, req); err != nil {
+		c.Close()
+		return nil, err
+	}
+	return c, nil
+}
+
+func (c *Commit) prepareUpdate(ctx context.Context, req UpdateRequest) error {
+	repoDir := filepath.Join(c.dir, "repo")
+	if _, err := c.git(ctx, c.dir, "clone", "--quiet", "--depth", "50", "--single-branch", "--branch", c.Branch,
+		"--no-tags", c.remote(), repoDir); err != nil {
+		return fmt.Errorf("clone %s: %w", c.Branch, err)
+	}
+	head, err := c.git(ctx, repoDir, "rev-parse", "HEAD")
+	if err != nil {
+		return err
+	}
+	c.ParentSHA = strings.TrimSpace(head)
+	if c.ParentSHA != req.HeadSHA {
+		return reject("the PR branch %s moved: it is at %s, not %s, so someone else pushed to it. "+
+			"Re-read the files (your checkout is at %s), describe the change in your reply instead, and let the reviewer decide.",
+			c.Branch, short(c.ParentSHA), short(req.HeadSHA), short(req.HeadSHA))
+	}
+	if err := c.applyAndCommit(ctx, repoDir, req.Title, req.Patch, req.IncidentID, "the PR branch "+c.Branch+" ("+short(c.ParentSHA)+")"); err != nil {
+		return err
+	}
+
+	// The PR's file list is what changed since its base, which a depth-50
+	// clone of the branch normally contains. Without it, the old list plus
+	// this commit's files can only over-protect.
+	if c.BaseSHA != "" {
+		if _, err := c.git(ctx, repoDir, "cat-file", "-e", c.BaseSHA+"^{commit}"); err == nil {
+			out, err := c.git(ctx, repoDir, "diff", "--name-only", "--no-renames", c.BaseSHA, "HEAD")
+			if err != nil {
+				return err
+			}
+			c.Files = nil
+			for _, f := range strings.Split(strings.TrimSpace(out), "\n") {
+				if f != "" {
+					c.Files = append(c.Files, f)
+				}
+			}
+			return nil
+		}
+	}
+	seen := map[string]bool{}
+	merged := []string{}
+	for _, f := range append(append([]string(nil), req.Files...), c.Files...) {
+		if !seen[f] {
+			seen[f] = true
+			merged = append(merged, f)
+		}
+	}
+	c.Files = merged
+	return nil
+}
+
+// applyAndCommit applies the patch to the checked-out branch in repoDir,
+// checks every staged path, and commits through the repository's hooks.
+// onto names what the patch was applied to, for the agent.
+func (c *Commit) applyAndCommit(ctx context.Context, repoDir, title, patch string, incidentID int64, onto string) error {
 	patchFile := filepath.Join(c.dir, "patch.diff")
-	if err := os.WriteFile(patchFile, []byte(ensureNewline(req.Patch)), 0o600); err != nil {
+	if err := os.WriteFile(patchFile, []byte(ensureNewline(patch)), 0o600); err != nil {
 		return err
 	}
 	if _, err := c.git(ctx, repoDir, "apply", "--index", "--3way", "--whitespace=nowarn", patchFile); err != nil {
-		return reject("the patch does not apply to the current main (%s):\n%s\nRe-read the files, edit them again and pass a fresh git_diff.",
-			short(c.BaseSHA), clip(err.Error(), 4000))
+		return reject("the patch does not apply to %s:\n%s\nRe-read the files, edit them again and pass a fresh git_diff.",
+			onto, clip(err.Error(), 4000))
 	}
 	if out, _ := c.git(ctx, repoDir, "diff", "--cached", "--name-only", "--diff-filter=U"); strings.TrimSpace(out) != "" {
-		return reject("the patch conflicts with the current main in: %s", strings.TrimSpace(out))
+		return reject("the patch conflicts with %s in: %s", onto, strings.TrimSpace(out))
 	}
 
 	raw, err := c.git(ctx, repoDir, "diff", "--cached", "--raw", "-z", "--no-renames", "--no-abbrev")
@@ -158,7 +269,7 @@ func (c *Commit) prepare(ctx context.Context, req Request) error {
 		}
 	}
 	msgFile := filepath.Join(c.dir, "message.txt")
-	if err := os.WriteFile(msgFile, []byte(CommitMessage(req.Title, req.IncidentID)), 0o600); err != nil {
+	if err := os.WriteFile(msgFile, []byte(CommitMessage(title, incidentID)), 0o600); err != nil {
 		return err
 	}
 	// The hooks are what a human committing here would run: render every
@@ -179,13 +290,17 @@ func (c *Commit) prepare(ctx context.Context, req Request) error {
 
 // Push publishes the branch. Only refs under agent/ are ever pushed, and the
 // destination is spelled out in full so no refspec trickery can widen it.
-// It overwrites a branch of the same name: one left behind by an earlier
-// attempt for this incident that never became a PR.
+// A new PR's push overwrites a branch of the same name: one left behind by an
+// earlier attempt for this incident that never became a PR. An update only
+// fast-forwards: GitHub refuses it if the branch moved since the clone.
 func (c *Commit) Push(ctx context.Context) error {
 	if !strings.HasPrefix(c.Branch, BranchPrefix) || strings.ContainsAny(c.Branch, " :^~?*[\\") {
 		return errors.New("refusing to push outside " + BranchPrefix)
 	}
 	refspec := "+" + c.HeadSHA + ":refs/heads/" + c.Branch
+	if c.update {
+		refspec = c.HeadSHA + ":refs/heads/" + c.Branch
+	}
 	if _, err := c.git(ctx, filepath.Join(c.dir, "repo"), "push", "--quiet", "--no-verify", c.remote(), refspec); err != nil {
 		return fmt.Errorf("push: %w", err)
 	}

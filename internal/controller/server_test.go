@@ -33,7 +33,8 @@ type fakeStore struct {
 	events    map[int64][]store.RunEvent
 	finished  map[int64]store.RunResult
 
-	prState *prState
+	prState   *prState
+	chatState *chatState
 }
 
 func (f *fakeStore) EnqueueRun(_ context.Context, incidentID int64, hold time.Duration) (runID int64, batched bool, err error) {

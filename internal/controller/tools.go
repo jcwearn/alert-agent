@@ -33,6 +33,13 @@ func (s *Server) mcpHandler() http.Handler {
 
 func (s *Server) toolServer(run store.Run) *mcp.Server {
 	srv := mcp.NewServer(&mcp.Implementation{Name: ToolServerName, Version: "v1"}, nil)
+	// A chat turn changes only its own PR: no merges, links or new PRs.
+	if run.Kind == store.KindChat {
+		if s.prs != nil {
+			s.addUpdateTool(srv, run)
+		}
+		return srv
+	}
 	s.addConsolidationTools(srv, run)
 	if s.prs == nil {
 		return srv

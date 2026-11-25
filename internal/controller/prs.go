@@ -38,6 +38,8 @@ type PRs struct {
 	Proposal proposal.Config
 	// Prepare defaults to proposal.Prepare; tests replace it.
 	Prepare func(ctx context.Context, cfg proposal.Config, token string, req proposal.Request) (*proposal.Commit, error)
+	// PrepareUpdate defaults to proposal.PrepareUpdate; tests replace it.
+	PrepareUpdate func(ctx context.Context, cfg proposal.Config, token string, req proposal.UpdateRequest) (*proposal.Commit, error)
 	// Push defaults to (*proposal.Commit).Push; tests replace it.
 	Push func(ctx context.Context, c *proposal.Commit) error
 
@@ -108,7 +110,7 @@ func (s *Server) propose(ctx context.Context, run store.Run, in ProposeInput) (s
 	}
 	defer commit.Close()
 	// After prepare, so the files are the ones git actually applied.
-	if err := s.checkOverlap(ctx, commit.Files); err != nil {
+	if err := s.checkOverlap(ctx, commit.Files, 0); err != nil {
 		return store.PullRequest{}, err
 	}
 	if err := push(ctx, commit); err != nil {
@@ -145,13 +147,18 @@ func (s *Server) propose(ctx context.Context, run store.Run, in ProposeInput) (s
 }
 
 // checkOverlap refuses a change to a file an open agent PR already changes:
-// two agent PRs on one file are the same fix twice, or a conflict.
-func (s *Server) checkOverlap(ctx context.Context, files []string) error {
+// two agent PRs on one file are the same fix twice, or a conflict. self is
+// the PR being updated (0 for a new one), which may of course change its own
+// files.
+func (s *Server) checkOverlap(ctx context.Context, files []string, self int64) error {
 	open, err := s.store.OpenPullRequests(ctx)
 	if err != nil {
 		return err
 	}
 	for _, pr := range open {
+		if pr.ID == self {
+			continue
+		}
 		var shared []string
 		for _, f := range files {
 			if slices.Contains(pr.Files, f) {

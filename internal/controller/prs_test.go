@@ -47,11 +47,12 @@ func (f *fakeStore) pr() *prState {
 	return f.prState
 }
 
-func (f *fakeStore) StartAction(_ context.Context, runID, _ int64, tool string, input json.RawMessage) (int64, error) {
+func (f *fakeStore) StartAction(_ context.Context, runID, incidentID int64, tool string, input json.RawMessage) (int64, error) {
 	p := f.pr()
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	p.actions = append(p.actions, fakeAction{runID: runID, tool: tool, status: store.ActionStarted, input: string(input)})
+	p.actions = append(p.actions, fakeAction{runID: runID, actor: store.ActorAgent, incident: incidentID, tool: tool,
+		status: store.ActionStarted, input: string(input)})
 	return int64(len(p.actions)), nil
 }
 

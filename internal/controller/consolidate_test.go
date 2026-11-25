@@ -36,8 +36,12 @@ func (f *fakeStore) IncidentActions(_ context.Context, id int64) ([]store.Action
 	var out []store.Action
 	for i, a := range p.actions {
 		if a.incident == id || a.target == id {
-			out = append(out, store.Action{ID: int64(i + 1), Actor: a.actor, IncidentID: a.incident, Tool: a.tool,
-				Input: json.RawMessage(a.input), Status: a.status, Result: a.result})
+			act := store.Action{ID: int64(i + 1), Actor: a.actor, IncidentID: a.incident, Tool: a.tool,
+				Input: json.RawMessage(a.input), Status: a.status, Result: a.result}
+			if a.runID != 0 {
+				act.RunID = &a.runID
+			}
+			out = append(out, act)
 		}
 	}
 	return out, nil

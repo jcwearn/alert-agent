@@ -83,6 +83,9 @@ func runController(ctx context.Context) error {
 		MaxTurns:     envInt("RUN_MAX_TURNS", 40),
 		RunHold:      envDuration("RUN_HOLD", time.Minute),
 		RecentWindow: envDuration("RECENT_WINDOW", 30*time.Minute),
+		// The same variable the dispatcher reads.
+		MaxRunsPerHour:   envInt("RUN_MAX_PER_HOUR", 6),
+		ChatMaxPerPRHour: envInt("CHAT_MAX_PER_PR_HOUR", 4),
 	}
 
 	var notifier controller.Notifier

@@ -58,6 +58,16 @@ type Store interface {
 	IncidentLinks(ctx context.Context, id int64) ([]store.Link, error)
 	IncidentChildren(ctx context.Context, id int64) ([]store.Incident, error)
 	RecentIncidents(ctx context.Context, since time.Time, limit int) ([]store.RecentIncident, error)
+
+	GetPullRequest(ctx context.Context, id int64) (store.PullRequest, error)
+	UpdatePullRequestHead(ctx context.Context, id int64, fromSHA, headSHA string, files []string) (bool, error)
+	EnqueueChat(ctx context.Context, m store.ChatMessage, lim store.ChatLimits) (store.ChatEnqueue, error)
+	ChatMessages(ctx context.Context, prID int64) ([]store.ChatMessage, error)
+	TurnMessages(ctx context.Context, runID int64) ([]store.ChatMessage, error)
+	FinishChatTurn(ctx context.Context, runID int64, answered bool, reply string) (store.ChatMessage, bool, error)
+	LatestSession(ctx context.Context, sessionID string, beforeRunID int64) ([]byte, error)
+	ActiveChatRun(ctx context.Context, prID int64) (store.Run, bool, error)
+	RunEventsAfter(ctx context.Context, runID int64, seq int) ([]store.RunEvent, error)
 }
 
 // Options configure the agent side of the controller.
@@ -75,6 +85,11 @@ type Options struct {
 	// RecentWindow is how far back a run's context lists other incidents,
 	// and how old a resolved incident may be to take a merge.
 	RecentWindow time.Duration
+	// ChatMaxPerPRHour caps the chat turns one PR can start in an hour.
+	ChatMaxPerPRHour int
+	// MaxRunsPerHour is the dispatcher's cap; a chat message arriving when
+	// it is reached is told so instead of waiting silently.
+	MaxRunsPerHour int
 }
 
 // Waker is told when there may be work for the dispatcher.
@@ -127,6 +142,8 @@ func (s *Server) UIHandler() http.Handler {
 	mux.HandleFunc("POST /incidents/{id}/unmerge", s.uiUnmerge)
 	mux.HandleFunc("POST /incidents/{id}/link", s.uiLink)
 	mux.HandleFunc("POST /incidents/{id}/unlink", s.uiUnlink)
+	mux.HandleFunc("POST /incidents/{id}/chat", s.uiChat)
+	mux.HandleFunc("GET /runs/{id}/stream", s.runStream)
 	// The UI has no login (it is tailnet-only), so a form post from another
 	// site in the same browser must not be able to merge incidents.
 	return http.NewCrossOriginProtection().Handler(mux)
@@ -261,6 +278,15 @@ func (s *Server) incidentDetail(w http.ResponseWriter, r *http.Request) {
 	}
 	if p, err := s.store.PullRequestForIncident(ctx, id); err == nil {
 		page.PR = &p
+		page.ChatEnabled = s.prs != nil && p.State == store.PROpen
+		if page.Chat, err = s.store.ChatMessages(ctx, p.ID); err != nil {
+			slog.Error("loading chat", "incident", id, "err", err)
+		}
+		if run, ok, err := s.store.ActiveChatRun(ctx, p.ID); err != nil {
+			slog.Error("loading chat turn", "incident", id, "err", err)
+		} else if ok {
+			page.ChatRun = &run
+		}
 	} else if !errors.Is(err, store.ErrNotFound) {
 		slog.Error("loading PR", "incident", id, "err", err)
 	}

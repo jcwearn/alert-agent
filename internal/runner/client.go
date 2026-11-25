@@ -40,6 +40,45 @@ func (c *client) session(ctx context.Context, gz []byte) error {
 	return err
 }
 
+// resumeSession fetches the gzipped session file a chat turn resumes.
+func (c *client) resumeSession(ctx context.Context) ([]byte, error) {
+	var lastErr error
+	for attempt := range 3 {
+		if attempt > 0 {
+			select {
+			case <-ctx.Done():
+				return nil, ctx.Err()
+			case <-time.After(time.Duration(attempt) * 2 * time.Second):
+			}
+		}
+		req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.base+runnerapi.PathSession, http.NoBody)
+		if err != nil {
+			return nil, err
+		}
+		req.Header.Set("Authorization", "Bearer "+c.token)
+		resp, err := c.http.Do(req)
+		if err != nil {
+			lastErr = err
+			continue
+		}
+		body, err := io.ReadAll(io.LimitReader(resp.Body, maxSession+1))
+		_ = resp.Body.Close()
+		switch {
+		case err != nil:
+			lastErr = err
+		case resp.StatusCode >= 500:
+			lastErr = fmt.Errorf("GET %s: %s", runnerapi.PathSession, resp.Status)
+		case resp.StatusCode != http.StatusOK:
+			return nil, fmt.Errorf("GET %s: %s: %s", runnerapi.PathSession, resp.Status, bytes.TrimSpace(body))
+		case len(body) > maxSession:
+			return nil, fmt.Errorf("session is over the %d byte limit", maxSession)
+		default:
+			return body, nil
+		}
+	}
+	return nil, lastErr
+}
+
 // fail reports a failed run. It returns an error only if the report itself
 // could not be delivered; see Run for why.
 func (c *client) fail(ctx context.Context, msg string) error {
