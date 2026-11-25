@@ -58,8 +58,17 @@ for device in desktop phone; do
 	shot new-general "$device" light "/?chat=open&pending=general"
 	shot new-incident "$device" light "/incidents/27?chat=open"
 	shot read-only-capped "$device" light "/incidents/24?chat=open&thread=5"
+	shot run "$device" light "/runs/29"
+	# Dark: the pages themselves, then the chat window's states.
+	shot home-closed "$device" dark "/"
+	shot incident-closed "$device" dark "/incidents/25"
+	shot run "$device" dark "/runs/29"
 	shot incident-open "$device" dark "/incidents/25?chat=open&thread=1"
 	shot switcher "$device" dark "/incidents/25?chat=open&thread=1&menu=1"
+	shot other-thread "$device" dark "/incidents/26?chat=open&thread=2"
+	shot streaming "$device" dark "/?chat=open&thread=4"
+	shot new-general "$device" dark "/?chat=open&pending=general"
+	shot read-only-capped "$device" dark "/incidents/24?chat=open&thread=5"
 done
 # Phones are always full screen; on a desktop it is a toggle.
 shot fullscreen desktop light "/incidents/25?chat=open&full=1&thread=1"

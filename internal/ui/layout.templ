@@ -10,16 +10,22 @@ templ layout(title string) {
 			<link rel="stylesheet" href={ assetURL("chat.css") }/>
 			<script src={ assetURL("chat.js") } defer></script>
 			<style>
+				/* Colour tokens. Surfaces step up bg → card → chip; borders (line)
+				   must stand out from both bg and card, which in dark mode is what
+				   separates a card from the page. accent fills the chat launcher and
+				   your messages. ui/contrast_test.go checks the pairs that matter. */
 				:root {
+					color-scheme: light;
 					--bg: #f7f7f5; --fg: #1d1d1b; --muted: #6b6b66; --line: #e2e2dc; --card: #ffffff;
 					--firing: #b42318; --firing-bg: #fdecea; --resolved: #1f7a3d; --resolved-bg: #e7f4ec;
-					--chip: #efefea;
+					--chip: #efefea; --accent: #1d1d1b; --on-accent: #f7f7f5;
 				}
 				@media (prefers-color-scheme: dark) {
 					:root {
-						--bg: #141413; --fg: #ecece8; --muted: #9a9a93; --line: #2c2c29; --card: #1c1c1a;
-						--firing: #ff8a80; --firing-bg: #3a1714; --resolved: #7fd29b; --resolved-bg: #13301e;
-						--chip: #262624;
+						color-scheme: dark;
+						--bg: #1a1a18; --fg: #ededE8; --muted: #b0b0a7; --line: #4f4f4a; --card: #292927;
+						--firing: #ff9a90; --firing-bg: #4a1f1b; --resolved: #86d9a2; --resolved-bg: #1c3d27;
+						--chip: #383835; --accent: #3d5a86; --on-accent: #f2f5fa;
 					}
 				}
 				* { box-sizing: border-box; }
@@ -90,6 +96,7 @@ templ layout(title string) {
 				.forms input[type=text] { width: 100%; margin: 6px 0; }
 				select, input, button { font: inherit; color: var(--fg); background: var(--card); border: 1px solid var(--line); border-radius: 6px; padding: 4px 8px; max-width: 100%; }
 				button { cursor: pointer; }
+				:focus-visible { outline: 2px solid var(--muted); outline-offset: 2px; }
 				.hint { font-size: 13px; }
 				.chip.kind { font-size: 12px; margin-left: 6px; }
 				.title-row { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 12px; }
