@@ -1,18 +1,23 @@
 /* The chat window (chat.js). Colours come from the layout's tokens, so it
    follows light and dark with the rest of the UI. */
+/* The panel is the page's background in light mode, lifted by a shadow. A
+   shadow cannot show on a dark page, so there the panel is one surface step
+   up (card) with its raised parts (menu, box, GitHub comments) one more. */
 :root {
 	--cw-shadow: 0 12px 40px rgba(0, 0, 0, .18), 0 2px 8px rgba(0, 0, 0, .08);
+	--cw-surface: var(--bg);
+	--cw-raised: var(--card);
 	--cw-gap: max(16px, env(safe-area-inset-right));
 	--cw-bottom: max(16px, env(safe-area-inset-bottom));
 }
 @media (prefers-color-scheme: dark) {
-	:root { --cw-shadow: 0 12px 40px rgba(0, 0, 0, .6), 0 0 0 1px var(--line); }
+	:root { --cw-shadow: 0 16px 48px rgba(0, 0, 0, .55); --cw-surface: var(--card); --cw-raised: var(--chip); }
 }
 
 .cw-launch {
 	position: fixed; right: var(--cw-gap); bottom: var(--cw-bottom); z-index: 1000;
 	width: 56px; height: 56px; padding: 0; border: 0; border-radius: 50%;
-	background: var(--fg); color: var(--bg); box-shadow: var(--cw-shadow);
+	background: var(--accent); color: var(--on-accent); box-shadow: var(--cw-shadow);
 	display: grid; place-items: center; cursor: pointer;
 }
 .cw-launch:hover { transform: translateY(-1px); }
@@ -21,7 +26,7 @@
 .cw-launch[hidden] { display: none; }
 .cw-dot {
 	position: absolute; top: 6px; right: 6px; width: 12px; height: 12px; border-radius: 50%;
-	background: var(--resolved); border: 2px solid var(--fg);
+	background: var(--resolved); border: 2px solid var(--accent);
 }
 .cw-busy .cw-dot { animation: cw-pulse 1.4s ease-in-out infinite; }
 
@@ -29,7 +34,7 @@
 	position: fixed; z-index: 1001; right: var(--cw-gap); bottom: calc(var(--cw-bottom) + 68px);
 	width: min(26rem, calc(100vw - 32px)); height: min(70vh, 720px);
 	display: flex; flex-direction: column; overflow: hidden;
-	background: var(--bg); color: var(--fg); border: 1px solid var(--line); border-radius: 14px;
+	background: var(--cw-surface); color: var(--fg); border: 1px solid var(--line); border-radius: 14px;
 	box-shadow: var(--cw-shadow); transform-origin: bottom right;
 }
 .cw-panel.cw-anim { animation: cw-in .16s ease-out; }
@@ -44,6 +49,7 @@
 .cw-full { --cw-side: max(12px, calc((100% - 52rem) / 2)); }
 .cw-full .cw-head, .cw-full .cw-switch, .cw-full .cw-log, .cw-full .cw-foot { padding-left: var(--cw-side); padding-right: var(--cw-side); }
 .cw-full .cw-head { padding-right: calc(var(--cw-side) - 4px); }
+.cw-panel.cw-full { background: var(--bg); }
 .cw-full .cw-menu { left: 50%; transform: translateX(-50%); width: min(30rem, calc(100% - 24px)); }
 
 .cw-head { display: flex; align-items: flex-start; gap: 4px; padding: 10px 8px 8px 12px; border-bottom: 1px solid var(--line); }
@@ -68,7 +74,7 @@
 
 .cw-menu {
 	position: absolute; z-index: 2; top: 52px; left: 8px; right: 8px; max-height: min(60%, 26rem); overflow-y: auto;
-	background: var(--card); border: 1px solid var(--line); border-radius: 10px; box-shadow: var(--cw-shadow); padding: 4px;
+	background: var(--cw-raised); border: 1px solid var(--line); border-radius: 10px; box-shadow: var(--cw-shadow); padding: 4px;
 }
 .cw-menu[hidden] { display: none; }
 .cw-group { font-size: 11px; text-transform: uppercase; letter-spacing: .05em; color: var(--muted); padding: 8px 10px 4px; font-weight: 600; }
@@ -76,13 +82,13 @@
 	display: flex; flex-direction: column; align-items: flex-start; width: 100%; gap: 1px; padding: 7px 10px;
 	border: 0; border-radius: 7px; background: none; text-align: left;
 }
-.cw-item:hover, .cw-item:focus-visible { background: var(--chip); outline: none; }
-.cw-item[aria-current] { background: var(--chip); box-shadow: inset 3px 0 0 var(--fg); }
+.cw-item:hover, .cw-item:focus-visible { background: var(--cw-surface); outline: none; }
+.cw-item[aria-current] { background: var(--cw-surface); box-shadow: inset 3px 0 0 var(--fg); }
 .cw-item-title { font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 100%; }
 .cw-item-meta { font-size: 12px; color: var(--muted); }
 .cw-new {
 	flex-direction: row; align-items: center; gap: 8px; margin-top: 4px; border-top: 1px solid var(--line); border-radius: 0 0 7px 7px;
-	position: sticky; bottom: -4px; background: var(--card);
+	position: sticky; bottom: -4px; background: var(--cw-raised);
 }
 
 .cw-switch {
@@ -91,7 +97,7 @@
 }
 .cw-switch[hidden] { display: none; }
 .cw-chip-btn {
-	border: 1px solid var(--line); background: var(--card); border-radius: 999px; padding: 2px 10px; font-size: 13px; text-align: left;
+	border: 1px solid var(--line); background: var(--cw-raised); color: var(--fg); border-radius: 999px; padding: 2px 10px; font-size: 13px; text-align: left;
 }
 .cw-chip-btn:hover { border-color: var(--muted); }
 
@@ -114,9 +120,9 @@
 /* People's messages sit in bubbles on the right; the agent's read as prose. */
 .cw-ui { align-self: flex-end; max-width: 85%; }
 .cw-ui .cw-meta { justify-content: flex-end; }
-.cw-ui .cw-body { background: var(--fg); color: var(--bg); padding: 7px 12px; border-radius: 14px 14px 4px 14px; }
+.cw-ui .cw-body { background: var(--accent); color: var(--on-accent); padding: 7px 12px; border-radius: 14px 14px 4px 14px; }
 .cw-github { max-width: 90%; }
-.cw-github .cw-body { background: var(--card); border: 1px solid var(--line); padding: 7px 12px; border-radius: 14px 14px 14px 4px; }
+.cw-github .cw-body { background: var(--cw-raised); border: 1px solid var(--line); padding: 7px 12px; border-radius: 14px 14px 14px 4px; }
 .cw-agent .cw-body { padding-left: 10px; border-left: 2px solid var(--resolved); }
 
 .cw-live .cw-step { font-size: 12.5px; color: var(--muted); padding-left: 10px; border-left: 2px solid var(--line); white-space: pre-wrap; overflow-wrap: anywhere; display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; }
@@ -138,7 +144,7 @@
 .cw-notice .cw-icon { color: inherit; }
 .cw-box {
 	display: flex; align-items: flex-end; gap: 6px; padding: 6px 6px 6px 12px;
-	background: var(--card); border: 1px solid var(--line); border-radius: 12px;
+	background: var(--cw-raised); border: 1px solid var(--line); border-radius: 12px;
 }
 .cw-box:focus-within { border-color: var(--muted); }
 .cw-box textarea {
@@ -149,7 +155,7 @@
 @media (pointer: coarse) { .cw-box textarea { font-size: 16px; } }
 .cw-send {
 	flex: none; width: 34px; height: 34px; padding: 0; border: 0; border-radius: 50%;
-	display: grid; place-items: center; background: var(--fg); color: var(--bg);
+	display: grid; place-items: center; background: var(--accent); color: var(--on-accent);
 }
 .cw-send svg { width: 18px; height: 18px; fill: none; stroke: currentColor; stroke-width: 2.4; stroke-linecap: round; stroke-linejoin: round; }
 .cw-send:disabled { opacity: .45; cursor: default; }

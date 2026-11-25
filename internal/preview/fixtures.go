@@ -134,6 +134,16 @@ func newFixtures() *fixtures {
 		tool("mcp__prometheus__query_range", map[string]any{"query": `max(container_memory_working_set_bytes{namespace="photos",container="ml-worker"})`}),
 	)}
 
+	// Run 29's transcript, so the run page shows each kind of step.
+	f.turns[29] = &turn{steps: script(ago(3*time.Hour), 0,
+		text("ml-worker in photos was OOMKilled three times. I'll check its limit against what it actually uses."),
+		tool("Read", map[string]any{"file_path": "/work/repo/apps/photos/ml-deployment.yaml"}),
+		result("resources:\n  requests:\n    memory: 2Gi\n  limits:\n    memory: 2Gi"),
+		tool("mcp__prometheus__query_range", map[string]any{"query": `max(container_memory_working_set_bytes{namespace="photos",container="ml-worker"})`}),
+		result("peak 2.71Gi at 02:14, during the nightly face-detection job"),
+		text("The limit is 2Gi and the 7-day peak is **2.71Gi**. A 3Gi limit leaves about 10% headroom; proposing that."),
+	)}
+
 	f.threads = []store.Thread{
 		{ID: 1, Kind: store.ThreadIncident, IncidentID: ptr(int64(25)), AlertName: "KubeContainerOOMKilled", Namespace: "photos", CreatedAt: ago(50 * time.Minute)},
 		{ID: 2, Kind: store.ThreadGeneral, Title: "How is the cluster?", CreatedAt: ago(2 * time.Hour)},
@@ -208,6 +218,11 @@ func script(start time.Time, gap time.Duration, payloads ...json.RawMessage) []s
 
 func text(s string) json.RawMessage {
 	b, _ := json.Marshal(map[string]any{"message": map[string]any{"content": []any{map[string]any{"type": "text", "text": s}}}})
+	return b
+}
+
+func result(s string) json.RawMessage {
+	b, _ := json.Marshal(map[string]any{"message": map[string]any{"content": []any{map[string]any{"type": "tool_result", "content": s}}}})
 	return b
 }
 
