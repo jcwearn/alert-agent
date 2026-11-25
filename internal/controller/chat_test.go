@@ -3,6 +3,7 @@ package controller
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -26,6 +27,7 @@ type chatState struct {
 	result     store.ChatEnqueue
 	sessions   map[string][]byte
 	activeChat *store.Run
+	failID     int64 // EnqueueChat fails for this GitHub comment id
 }
 
 func (f *fakeStore) chat() *chatState {
@@ -59,6 +61,9 @@ func (f *fakeStore) UpdatePullRequestHead(_ context.Context, id int64, from, hea
 
 func (f *fakeStore) EnqueueChat(_ context.Context, m store.ChatMessage, _ store.ChatLimits) (store.ChatEnqueue, error) {
 	c := f.chat()
+	if c.failID != 0 && m.GHID == c.failID {
+		return store.ChatEnqueue{}, errors.New("encode failed")
+	}
 	c.enqueued = append(c.enqueued, m)
 	res := c.result
 	if !res.Duplicate {

@@ -152,8 +152,8 @@ func TestChatCapsAndClosedPR(t *testing.T) {
 		t.Fatalf("global cap (2 runs started this hour): %+v %v", global, err)
 	}
 
-	// GitHub comments dedupe on their id.
-	gh := ChatMessage{PRID: pr.ID, Source: SourceGitHub, Author: "me", Body: "hi", GHKind: GHIssueComment, GHID: 99}
+	// GitHub comments dedupe on their id. Real ids no longer fit in 32 bits.
+	gh := ChatMessage{PRID: pr.ID, Source: SourceGitHub, Author: "me", Body: "hi", GHKind: GHReviewComment, GHID: 7171034603, GHThreadID: 4699221870}
 	if r, err := s.EnqueueChat(ctx, gh, ChatLimits{}); err != nil || r.Duplicate {
 		t.Fatalf("first comment: %+v %v", r, err)
 	}
@@ -178,6 +178,13 @@ func TestChatCapsAndClosedPR(t *testing.T) {
 		t.Errorf("message on a closed PR: %v", err)
 	}
 	all, _ := s.ChatMessages(ctx, pr.ID)
+	found := false
+	for _, m := range all {
+		found = found || (m.GHID == 7171034603 && m.GHThreadID == 4699221870)
+	}
+	if !found {
+		t.Error("a 64-bit GitHub comment id did not round-trip")
+	}
 	for _, m := range all {
 		if m.Status == ChatQueued {
 			t.Errorf("message %q still queued after its PR closed", m.Body)

@@ -105,9 +105,17 @@ func (s *Server) PollCommentsOnce(ctx context.Context) error {
 				}
 				write = tok.Token
 			}
-			if s.takeComment(ctx, write, pr, c.msg) {
-				queued = true
+			took, err := s.takeComment(ctx, write, pr, c.msg)
+			if err != nil {
+				// Not recorded: keep the cursor at this comment, so the next
+				// pass reads it again (GitHub's since is inclusive, and the
+				// dedupe key absorbs the ones already recorded).
+				slog.Error("queueing PR comment", "pr", pr.Number, "comment", c.msg.GHID, "err", err)
+				if c.at.Before(newest) {
+					newest = c.at
+				}
 			}
+			queued = queued || took
 		}
 		// Only after every comment is recorded: a crash before this re-reads
 		// them, and the dedupe key makes that harmless.
@@ -186,22 +194,21 @@ func (s *Server) fetchComments(ctx context.Context, token string, pr store.PullR
 
 // takeComment records one comment and acknowledges it: 👀 when it is queued,
 // or a short reply when a limit refused it. It reports whether a turn now
-// has it.
-func (s *Server) takeComment(ctx context.Context, token string, pr store.PullRequest, m store.ChatMessage) bool {
+// has it, and an error only when the comment could not be recorded.
+func (s *Server) takeComment(ctx context.Context, token string, pr store.PullRequest, m store.ChatMessage) (bool, error) {
 	res, err := s.store.EnqueueChat(ctx, m, s.chatLimits())
 	switch {
 	case err != nil:
-		slog.Error("queueing PR comment", "pr", pr.Number, "comment", m.GHID, "err", err)
-		return false
+		return false, err
 	case res.Duplicate:
-		return false
+		return false, nil
 	case res.Capped != "":
 		s.metrics.comments.WithLabelValues("capped").Inc()
 		slog.Info("PR comment capped", "pr", pr.Number, "comment", m.GHID, "reason", res.Capped)
 		if _, err := s.postReply(ctx, token, pr, []store.ChatMessage{m}, cappedText(res, s.now())); err != nil {
 			slog.Error("replying to a capped comment", "pr", pr.Number, "err", err)
 		}
-		return false
+		return false, nil
 	}
 	if res.NewRun {
 		s.metrics.comments.WithLabelValues("queued").Inc()
@@ -217,7 +224,7 @@ func (s *Server) takeComment(ctx context.Context, token string, pr store.PullReq
 			slog.Error("recording reaction", "comment", m.GHID, "err", err)
 		}
 	}
-	return true
+	return true, nil
 }
 
 // react adds 👀. A review's own body cannot take a reaction.
