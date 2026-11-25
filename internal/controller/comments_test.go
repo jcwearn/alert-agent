@@ -275,3 +275,29 @@ func TestPollCommentsHoldsCursorAtAFailure(t *testing.T) {
 		t.Errorf("cursor after recovery = %v", pr.CommentsSince)
 	}
 }
+
+// The comment at the cursor comes back on every pass (since is inclusive);
+// an ignored one is counted once, not once per poll.
+func TestIgnoredCommentCountedOnce(t *testing.T) {
+	s, _, _, gc, since := commentServer(t)
+	gc.issue = []github.IssueComment{{ID: 2, Body: "my reply", User: theApp, CreatedAt: since.Add(time.Minute)}}
+	for range 3 {
+		if err := s.PollCommentsOnce(t.Context()); err != nil {
+			t.Fatal(err)
+		}
+	}
+	_, metrics := do(t, s.UIHandler(), http.MethodGet, "/metrics", "")
+	if !strings.Contains(metrics, `alert_agent_pr_comments_total{outcome="ignored"} 1`+"\n") {
+		t.Errorf("ignored not counted once after three passes:\n%s", grepLines(metrics, "pr_comments"))
+	}
+}
+
+func grepLines(s, sub string) string {
+	var out []string
+	for _, l := range strings.Split(s, "\n") {
+		if strings.Contains(l, sub) {
+			out = append(out, l)
+		}
+	}
+	return strings.Join(out, "\n")
+}
