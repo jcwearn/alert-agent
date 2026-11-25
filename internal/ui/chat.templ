@@ -35,7 +35,7 @@ func chatNote(m store.ChatMessage) string {
 templ chatPanel(p IncidentPage) {
 	<h2 id="chat">Chat with the agent</h2>
 	<div class="chat">
-		if len(p.Chat) == 0 {
+		if len(p.Chat) == 0 && p.ChatEnabled {
 			<p class="muted hint">
 				Ask the agent about this PR, or ask it to change something: it continues the session that opened the PR,
 				and a change becomes a new commit on the same branch.

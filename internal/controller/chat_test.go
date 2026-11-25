@@ -60,7 +60,13 @@ func (f *fakeStore) UpdatePullRequestHead(_ context.Context, id int64, from, hea
 func (f *fakeStore) EnqueueChat(_ context.Context, m store.ChatMessage, _ store.ChatLimits) (store.ChatEnqueue, error) {
 	c := f.chat()
 	c.enqueued = append(c.enqueued, m)
-	return c.result, nil
+	res := c.result
+	if !res.Duplicate {
+		m.ID = int64(len(c.messages) + 1)
+		c.messages = append(c.messages, m)
+		res.MessageID = m.ID
+	}
+	return res, nil
 }
 
 func (f *fakeStore) ChatMessages(_ context.Context, prID int64) ([]store.ChatMessage, error) {
@@ -99,7 +105,8 @@ func (f *fakeStore) FinishChatTurn(_ context.Context, runID int64, answered bool
 			m.Status = status
 		}
 	}
-	m := store.ChatMessage{PRID: *f.runs[runID].PRID, RunID: &runID, Source: store.SourceAgent, Body: reply, Status: store.ChatReply}
+	m := store.ChatMessage{ID: int64(len(c.messages) + 1), PRID: *f.runs[runID].PRID, RunID: &runID, Source: store.SourceAgent,
+		Body: reply, Status: store.ChatReply}
 	c.messages = append(c.messages, m)
 	return m, true, nil
 }

@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -115,10 +116,26 @@ func (a *App) api(ctx context.Context, token, method, path string, in any, want 
 	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode != want {
 		msg, _ := io.ReadAll(io.LimitReader(resp.Body, 2048))
-		return fmt.Errorf("%s %s: GitHub answered %d: %s", method, strings.SplitN(path, "?", 2)[0], resp.StatusCode, strings.TrimSpace(string(msg)))
+		return &StatusError{Method: method, Path: strings.SplitN(path, "?", 2)[0], Code: resp.StatusCode, Message: strings.TrimSpace(string(msg))}
 	}
 	if out == nil {
 		return nil
 	}
 	return json.NewDecoder(resp.Body).Decode(out)
+}
+
+// StatusError is a GitHub answer with an unexpected status.
+type StatusError struct {
+	Method, Path string
+	Code         int
+	Message      string
+}
+
+func (e *StatusError) Error() string {
+	return fmt.Sprintf("%s %s: GitHub answered %d: %s", e.Method, e.Path, e.Code, e.Message)
+}
+
+func isStatus(err error, code int) bool {
+	var se *StatusError
+	return errors.As(err, &se) && se.Code == code
 }
