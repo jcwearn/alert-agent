@@ -206,6 +206,12 @@ func (s *Store) UpdatePullRequestHead(ctx context.Context, id int64, fromSHA, he
 	return tag.RowsAffected() == 1, nil
 }
 
+// SetPullRequestTitle records a PR's new title.
+func (s *Store) SetPullRequestTitle(ctx context.Context, id int64, title string) error {
+	_, err := s.pool.Exec(ctx, `UPDATE pull_requests SET title = $2, updated_at = now() WHERE id = $1`, id, title)
+	return err
+}
+
 // OpenPullRequests lists PRs still awaiting review, oldest first.
 func (s *Store) OpenPullRequests(ctx context.Context) ([]PullRequest, error) {
 	rows, err := s.pool.Query(ctx, `SELECT `+prColumns+prFrom+` WHERE p.state = 'open' ORDER BY p.created_at`)

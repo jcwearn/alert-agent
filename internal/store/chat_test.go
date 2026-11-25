@@ -117,6 +117,12 @@ func TestChatTurnLifecycle(t *testing.T) {
 		t.Errorf("statuses: %s %s %s, reply %q", all[0].Status, all[1].Status, all[2].Status, all[3].Body)
 	}
 
+	if err := s.SetPullRequestTitle(ctx, pr.ID, "fix(x): z"); err != nil {
+		t.Fatal(err)
+	}
+	if p, _ := s.GetPullRequest(ctx, pr.ID); p.Title != "fix(x): z" {
+		t.Errorf("title = %q", p.Title)
+	}
 	moved, err := s.UpdatePullRequestHead(ctx, pr.ID, "head1", "head2", []string{"apps/x/a.yaml", "apps/x/b.yaml"})
 	if err != nil || !moved {
 		t.Fatalf("head update: %v %v", moved, err)

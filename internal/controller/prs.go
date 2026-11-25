@@ -21,6 +21,7 @@ type GitHub interface {
 	InstallationToken(ctx context.Context, repos []string, permissions map[string]string) (github.Token, error)
 	CreatePullRequest(ctx context.Context, token, repo string, pr github.NewPullRequest) (github.PullRequest, error)
 	GetPullRequest(ctx context.Context, token, repo string, number int) (github.PullRequest, error)
+	UpdatePullRequestTitle(ctx context.Context, token, repo string, number int, title string) error
 	ChecksRollup(ctx context.Context, token, repo, sha string) (string, error)
 }
 

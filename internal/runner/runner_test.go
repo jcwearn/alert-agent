@@ -516,7 +516,7 @@ func TestRunChatTurn(t *testing.T) {
 	if !strings.Contains(args, "--resume\n11111111-2222-3333-4444-555555555555") || strings.Contains(args, "--session-id") {
 		t.Errorf("a chat turn must resume the session, not start one:\n%s", args)
 	}
-	for _, want := range []string{"update_pr", "verbatim as your reply", "message 1, from ui in the UI", "jcwearn on GitHub (review comment)",
+	for _, want := range []string{"update_pr", "pr_title", "verbatim as your reply", "message 1, from ui in the UI", "jcwearn on GitHub (review comment)",
 		"On apps/ebooks/deployment.yaml line 12", "```diff", "Answer all of them"} {
 		if !strings.Contains(args, want) {
 			t.Errorf("chat prompt lacks %q", want)

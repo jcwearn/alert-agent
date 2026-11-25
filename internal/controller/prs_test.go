@@ -6,6 +6,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -146,11 +147,23 @@ func (f *fakeStore) SaveRunSession(_ context.Context, runID int64, _ []byte, siz
 }
 
 type fakeGitHub struct {
-	mu      sync.Mutex
-	perms   []map[string]string
-	created []github.NewPullRequest
-	pr      github.PullRequest
-	checks  string
+	mu         sync.Mutex
+	perms      []map[string]string
+	created    []github.NewPullRequest
+	pr         github.PullRequest
+	checks     string
+	retitled   []string
+	retitleErr error
+}
+
+func (g *fakeGitHub) UpdatePullRequestTitle(_ context.Context, _, _ string, number int, title string) error {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	if g.retitleErr != nil {
+		return g.retitleErr
+	}
+	g.retitled = append(g.retitled, fmt.Sprintf("#%d %s", number, title))
+	return nil
 }
 
 func (g *fakeGitHub) InstallationToken(_ context.Context, repos []string, perms map[string]string) (github.Token, error) {
