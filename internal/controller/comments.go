@@ -149,7 +149,11 @@ func (s *Server) fetchComments(ctx context.Context, token string, pr store.PullR
 			newest = at
 		}
 		if !s.comments.allowed(u) || strings.TrimSpace(m.Body) == "" {
-			s.metrics.comments.WithLabelValues("ignored").Inc()
+			// GitHub's since is inclusive, so the comment at the cursor comes
+			// back every pass; count it once.
+			if at.After(since) {
+				s.metrics.comments.WithLabelValues("ignored").Inc()
+			}
 			slog.Debug("ignoring PR comment", "pr", pr.Number, "login", u.Login, "type", u.Type, "kind", m.GHKind)
 			return
 		}

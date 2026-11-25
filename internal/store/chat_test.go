@@ -2,6 +2,7 @@ package store
 
 import (
 	"errors"
+	"strings"
 	"testing"
 	"time"
 )
@@ -42,7 +43,7 @@ func TestChatTurnLifecycle(t *testing.T) {
 	s := openTestStore(t)
 	ctx := t.Context()
 	pr, prRun := openPR(t, s)
-	lim := ChatLimits{PerPRHour: 4, GlobalHour: 100}
+	lim := ChatLimits{PerPRHour: 4, AllHour: 100}
 
 	// A diagnosis queued before the chat turn, for another alert.
 	other := payload("firing", alert("z", "firing"))
@@ -132,7 +133,7 @@ func TestChatCapsAndClosedPR(t *testing.T) {
 	s := openTestStore(t)
 	ctx := t.Context()
 	pr, _ := openPR(t, s)
-	lim := ChatLimits{PerPRHour: 1, GlobalHour: 100}
+	lim := ChatLimits{PerPRHour: 1, AllHour: 100}
 
 	first, err := s.EnqueueChat(ctx, uiMessage(pr.ID, "one"), lim)
 	if err != nil || !first.NewRun {
@@ -147,9 +148,14 @@ func TestChatCapsAndClosedPR(t *testing.T) {
 		t.Fatalf("per-PR cap: %+v %v", capped, err)
 	}
 
-	global, err := s.EnqueueChat(ctx, uiMessage(pr.ID, "three"), ChatLimits{GlobalHour: 2})
-	if err != nil || global.Capped == "" {
-		t.Fatalf("global cap (2 runs started this hour): %+v %v", global, err)
+	// The all-PR chat cap counts chat turns only: one so far. The diagnosis
+	// that opened the PR does not count.
+	global, err := s.EnqueueChat(ctx, uiMessage(pr.ID, "three"), ChatLimits{AllHour: 1})
+	if err != nil || !strings.Contains(global.Capped, "across all PRs") {
+		t.Fatalf("all-PR cap of 1 with one chat turn this hour: %+v %v", global, err)
+	}
+	if r, err := s.EnqueueChat(ctx, uiMessage(pr.ID, "four"), ChatLimits{AllHour: 2}); err != nil || r.Capped != "" || !r.NewRun {
+		t.Fatalf("one chat turn is under an all-PR cap of 2: %+v %v", r, err)
 	}
 
 	// GitHub comments dedupe on their id. Real ids no longer fit in 32 bits.

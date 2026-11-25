@@ -83,8 +83,9 @@ func collectChat(rows pgx.Rows, err error) ([]ChatMessage, error) {
 type ChatLimits struct {
 	// PerPRHour caps the turns started for one PR in an hour.
 	PerPRHour int
-	// GlobalHour is the dispatcher's cap on runs of any kind in an hour.
-	GlobalHour int
+	// AllHour caps the chat turns all PRs together can start in an hour.
+	// Alert runs have their own cap in the dispatcher.
+	AllHour int
 }
 
 // ChatEnqueue is what became of a message.
@@ -156,16 +157,14 @@ func (s *Store) EnqueueChat(ctx context.Context, m ChatMessage, lim ChatLimits) 
 			return err
 		}
 
-		var prTurns, allRuns int
+		var prTurns, allTurns int
 		var prOldest, allOldest *time.Time
-		if err := tx.QueryRow(ctx, `
-			SELECT count(*), min(created_at) FROM runs
-			WHERE pr_id = $1 AND kind = 'chat' AND status <> 'skipped' AND created_at > now() - interval '1 hour'`,
-			m.PRID).Scan(&prTurns, &prOldest); err != nil {
+		const recentTurns = `FROM runs WHERE kind = 'chat' AND status <> 'skipped' AND created_at > now() - interval '1 hour'`
+		if err := tx.QueryRow(ctx, `SELECT count(*), min(created_at) `+recentTurns+` AND pr_id = $1`, m.PRID).
+			Scan(&prTurns, &prOldest); err != nil {
 			return err
 		}
-		if err := tx.QueryRow(ctx, `SELECT count(*), min(started_at) FROM runs WHERE started_at > now() - interval '1 hour'`).
-			Scan(&allRuns, &allOldest); err != nil {
+		if err := tx.QueryRow(ctx, `SELECT count(*), min(created_at) `+recentTurns).Scan(&allTurns, &allOldest); err != nil {
 			return err
 		}
 		switch {
@@ -174,8 +173,8 @@ func (s *Store) EnqueueChat(ctx context.Context, m ChatMessage, lim ChatLimits) 
 			if prOldest != nil {
 				res.RetryAt = prOldest.Add(time.Hour)
 			}
-		case lim.GlobalHour > 0 && allRuns >= lim.GlobalHour:
-			res.Capped = fmt.Sprintf("the agent already started %d runs in the last hour (the limit across all incidents)", allRuns)
+		case lim.AllHour > 0 && allTurns >= lim.AllHour:
+			res.Capped = fmt.Sprintf("the agent already took %d chat turns in the last hour (the limit across all PRs)", allTurns)
 			if allOldest != nil {
 				res.RetryAt = allOldest.Add(time.Hour)
 			}

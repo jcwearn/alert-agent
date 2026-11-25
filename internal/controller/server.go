@@ -90,9 +90,9 @@ type Options struct {
 	RecentWindow time.Duration
 	// ChatMaxPerPRHour caps the chat turns one PR can start in an hour.
 	ChatMaxPerPRHour int
-	// MaxRunsPerHour is the dispatcher's cap; a chat message arriving when
-	// it is reached is told so instead of waiting silently.
-	MaxRunsPerHour int
+	// ChatMaxPerHour caps the chat turns all PRs together start in an hour.
+	// Chat turns do not count against the alert runs' RUN_MAX_PER_HOUR.
+	ChatMaxPerHour int
 }
 
 // Waker is told when there may be work for the dispatcher.

@@ -136,3 +136,37 @@ func TestRunsStartedSince(t *testing.T) {
 }
 
 func itoa(n int64) string { return strconv.FormatInt(n, 10) }
+
+// Chat turns have their own budget: they never count against the alert
+// runs' cap, and the dispatcher can claim them alone when that cap is full.
+func TestChatTurnsOutsideAlertCap(t *testing.T) {
+	s := openTestStore(t)
+	ctx := t.Context()
+	pr, _ := openPR(t, s) // one diagnosis started
+	if _, err := s.EnqueueChat(ctx, uiMessage(pr.ID, "why?"), ChatLimits{}); err != nil {
+		t.Fatal(err)
+	}
+	other := payload("firing", alert("z", "firing"))
+	other.GroupKey = `{}:{alertname="KubeJobFailed", namespace="ebooks"}`
+	diag, _, err := s.EnqueueRun(ctx, record(t, s, other).IncidentID, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	turn, ok, err := s.ClaimNextChatRun(ctx, []byte("c"), "j-", "m")
+	if err != nil || !ok || turn.Kind != KindChat {
+		t.Fatalf("chat-only claim: %+v %v %v", turn, ok, err)
+	}
+	if n, err := s.RunsStartedSince(ctx, time.Now().Add(-time.Hour)); err != nil || n != 1 {
+		t.Errorf("alert runs started = %d, %v; want 1 (the chat turn does not count)", n, err)
+	}
+	if _, err := s.FinishRun(ctx, turn.ID, RunResult{Status: RunSucceeded}); err != nil {
+		t.Fatal(err)
+	}
+	if r, ok, err := s.ClaimNextChatRun(ctx, []byte("c2"), "j-", "m"); err != nil || ok {
+		t.Fatalf("chat-only claim took a diagnosis: %+v %v %v", r, ok, err)
+	}
+	if r, ok, err := s.ClaimNextRun(ctx, []byte("d"), "j-", "m"); err != nil || !ok || r.ID != diag {
+		t.Fatalf("claim: %+v %v %v, want diagnosis %d", r, ok, err, diag)
+	}
+}

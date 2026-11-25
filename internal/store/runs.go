@@ -142,6 +142,17 @@ const liveMember = `EXISTS (SELECT 1 FROM run_incidents ri JOIN incidents i ON i
 // It returns false when nothing is ready, or when a run is already running
 // (the runs_one_running index refuses a second one).
 func (s *Store) ClaimNextRun(ctx context.Context, tokenHash []byte, jobPrefix, model string) (Run, bool, error) {
+	return s.claim(ctx, tokenHash, jobPrefix, model, false)
+}
+
+// ClaimNextChatRun is ClaimNextRun for chat turns only: the dispatcher uses
+// it when the alert runs' hourly cap is reached, since chat turns have their
+// own budget (checked when a message arrives).
+func (s *Store) ClaimNextChatRun(ctx context.Context, tokenHash []byte, jobPrefix, model string) (Run, bool, error) {
+	return s.claim(ctx, tokenHash, jobPrefix, model, true)
+}
+
+func (s *Store) claim(ctx context.Context, tokenHash []byte, jobPrefix, model string, chatOnly bool) (Run, bool, error) {
 	var run Run
 	var claimed bool
 	err := pgx.BeginFunc(ctx, s.pool, func(tx pgx.Tx) error {
@@ -188,9 +199,10 @@ func (s *Store) ClaimNextRun(ctx context.Context, tokenHash []byte, jobPrefix, m
 				), runs.incident_id) END
 			WHERE id = (
 				SELECT id FROM runs WHERE status = 'queued' AND (hold_until IS NULL OR hold_until <= now())
+					AND (NOT $4 OR kind = 'chat')
 				ORDER BY kind = 'chat' DESC, id LIMIT 1 FOR UPDATE SKIP LOCKED
 			)
-			RETURNING `+runColumns, tokenHash, jobPrefix, model)
+			RETURNING `+runColumns, tokenHash, jobPrefix, model, chatOnly)
 		r, err := scanRun(row)
 		if errors.Is(err, pgx.ErrNoRows) {
 			return nil
@@ -246,10 +258,11 @@ func (s *Store) RunningRun(ctx context.Context) (Run, bool, error) {
 	return r, err == nil, err
 }
 
-// RunsStartedSince counts runs that started after t, for the hourly cap.
+// RunsStartedSince counts alert runs (diagnoses) that started after t, for
+// their hourly cap. Chat turns have a budget of their own.
 func (s *Store) RunsStartedSince(ctx context.Context, t time.Time) (int, error) {
 	var n int
-	err := s.pool.QueryRow(ctx, `SELECT count(*) FROM runs WHERE started_at > $1`, t).Scan(&n)
+	err := s.pool.QueryRow(ctx, `SELECT count(*) FROM runs WHERE started_at > $1 AND kind = 'diagnose'`, t).Scan(&n)
 	return n, err
 }
 
