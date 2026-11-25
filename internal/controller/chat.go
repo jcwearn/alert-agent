@@ -15,7 +15,6 @@ import (
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
 	"github.com/jcwearn/alert-agent/internal/proposal"
-	"github.com/jcwearn/alert-agent/internal/runnerapi"
 	"github.com/jcwearn/alert-agent/internal/store"
 	"github.com/jcwearn/alert-agent/internal/ui"
 )
@@ -34,34 +33,6 @@ const maxUpdateAttempts = 3
 
 // maxChatMessage bounds one message typed in the UI.
 const maxChatMessage = 8000
-
-// chatContext is a chat turn's runner context: the PR it is about and the
-// reviewer's messages. The rest of the conversation is in the session.
-func (s *Server) chatContext(ctx context.Context, run store.Run, in store.Incident) (runnerapi.Context, error) {
-	rc := runnerapi.Context{
-		RunID: run.ID, SessionID: run.SessionID, Model: run.Model, MaxTurns: s.opts.MaxTurns,
-		UIURL: s.incidentURL(in.ID), Kind: runnerapi.KindChat, UpdatePR: s.prs != nil,
-		Incident: apiIncident(in),
-	}
-	if run.PRID == nil {
-		return rc, errors.New("chat run without a PR")
-	}
-	pr, err := s.store.GetPullRequest(ctx, *run.PRID)
-	if err != nil {
-		return rc, err
-	}
-	rc.PR = &runnerapi.PR{Number: pr.Number, URL: pr.URL, Title: pr.Title, Branch: pr.Branch, HeadSHA: pr.HeadSHA,
-		Files: pr.Files, State: pr.State, Checks: pr.Checks}
-	msgs, err := s.store.TurnMessages(ctx, run.ID)
-	if err != nil {
-		return rc, err
-	}
-	for _, m := range msgs {
-		rc.Messages = append(rc.Messages, runnerapi.ChatMessage{Source: m.Source, Author: m.Author, Body: m.Body, At: m.CreatedAt,
-			Kind: m.GHKind, Path: m.Path, Line: m.Line, DiffHunk: m.DiffHunk})
-	}
-	return rc, nil
-}
 
 // runnerResumeSession gives a chat turn the newest session file of its
 // conversation.
@@ -235,7 +206,7 @@ func (s *Server) updatePR(ctx context.Context, run store.Run, in UpdateInput) (s
 
 // chatLimits are the caps a new turn is checked against.
 func (s *Server) chatLimits() store.ChatLimits {
-	return store.ChatLimits{PerPRHour: s.opts.ChatMaxPerPRHour, AllHour: s.opts.ChatMaxPerHour}
+	return store.ChatLimits{PerThreadHour: s.opts.ChatMaxPerThreadHour, AllHour: s.opts.ChatMaxPerHour}
 }
 
 // chatTurnFinished records the agent's reply to the turn's messages, with a
@@ -259,7 +230,7 @@ func (s *Server) chatTurnFinished(ctx context.Context, run store.Run) {
 		return
 	}
 	if first {
-		slog.Info("chat turn finished", "run", run.ID, "pr_id", *run.PRID, "answered", answered)
+		slog.Info("chat turn finished", "run", run.ID, "thread", deref(run.ThreadID), "answered", answered)
 		s.replyOnGitHub(ctx, run, msg)
 	}
 }
@@ -312,9 +283,6 @@ func (s *Server) uiChat(w http.ResponseWriter, r *http.Request) {
 	}
 	body := strings.TrimSpace(r.PostFormValue("message"))
 	switch {
-	case s.prs == nil:
-		back("error", "The PR path is off, so there is no one to chat with.")
-		return
 	case body == "":
 		back("error", "Type a message first.")
 		return
@@ -323,20 +291,21 @@ func (s *Server) uiChat(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	ctx := r.Context()
-	pr, err := s.store.PullRequestForIncident(ctx, id)
+	th, err := s.threadForIncident(ctx, id, true)
 	if errors.Is(err, store.ErrNotFound) {
-		back("error", "This incident has no PR to talk about.")
+		back("error", "No such incident.")
 		return
 	}
 	if err != nil {
-		slog.Error("loading PR for chat", "incident", id, "err", err)
-		back("error", "The controller failed to load the PR; its error is logged.")
+		slog.Error("loading thread for chat", "incident", id, "err", err)
+		back("error", "The controller failed to load the conversation; its error is logged.")
 		return
 	}
-	res, err := s.store.EnqueueChat(ctx, store.ChatMessage{PRID: pr.ID, Source: store.SourceUI, Author: "you", Body: body}, s.chatLimits())
+	res, err := s.store.EnqueueChat(ctx, store.ChatMessage{ThreadID: th.ID, Source: store.SourceUI, Author: "you", Body: body,
+		Page: "/incidents/" + strconv.FormatInt(id, 10)}, s.chatLimits())
 	switch {
-	case errors.Is(err, store.ErrPRNotOpen):
-		back("error", fmt.Sprintf("PR #%d is %s; the conversation is over.", pr.Number, pr.State))
+	case errors.Is(err, store.ErrThreadArchived):
+		back("error", "This conversation is archived.")
 		return
 	case err != nil:
 		slog.Error("queueing chat", "incident", id, "err", err)
@@ -346,7 +315,7 @@ func (s *Server) uiChat(w http.ResponseWriter, r *http.Request) {
 		back("error", cappedText(res, s.now()))
 		return
 	}
-	slog.Info("chat message queued", "incident", id, "pr", pr.Number, "run", res.RunID, "new_turn", res.NewRun)
+	slog.Info("chat message queued", "incident", id, "thread", th.ID, "run", res.RunID, "new_turn", res.NewRun)
 	if res.NewRun {
 		s.metrics.runs.WithLabelValues(store.RunQueued).Inc()
 	}
@@ -463,4 +432,11 @@ func (s *Server) runStream(w http.ResponseWriter, r *http.Request) {
 		case <-tick.C:
 		}
 	}
+}
+
+func deref(p *int64) int64 {
+	if p == nil {
+		return 0
+	}
+	return *p
 }

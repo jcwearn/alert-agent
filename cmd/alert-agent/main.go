@@ -78,13 +78,14 @@ func runController(ctx context.Context) error {
 	defer st.Close()
 
 	opts := controller.Options{
-		AgentEnabled:     os.Getenv("AGENT_ENABLED") == "true",
-		PublicURL:        os.Getenv("PUBLIC_URL"),
-		MaxTurns:         envInt("RUN_MAX_TURNS", 40),
-		RunHold:          envDuration("RUN_HOLD", time.Minute),
-		RecentWindow:     envDuration("RECENT_WINDOW", 30*time.Minute),
-		ChatMaxPerHour:   envInt("CHAT_MAX_PER_HOUR", 12),
-		ChatMaxPerPRHour: envInt("CHAT_MAX_PER_PR_HOUR", 4),
+		AgentEnabled:   os.Getenv("AGENT_ENABLED") == "true",
+		PublicURL:      os.Getenv("PUBLIC_URL"),
+		MaxTurns:       envInt("RUN_MAX_TURNS", 40),
+		RunHold:        envDuration("RUN_HOLD", time.Minute),
+		RecentWindow:   envDuration("RECENT_WINDOW", 30*time.Minute),
+		ChatMaxPerHour: envInt("CHAT_MAX_PER_HOUR", 12),
+		// CHAT_MAX_PER_PR_HOUR is the 0.10-0.12 name, still read during the move.
+		ChatMaxPerThreadHour: envInt("CHAT_MAX_PER_THREAD_HOUR", envInt("CHAT_MAX_PER_PR_HOUR", 4)),
 	}
 
 	var notifier controller.Notifier

@@ -17,6 +17,13 @@ import (
 // test, so tests never see each other's rows.
 func openTestStore(t *testing.T) *Store {
 	t.Helper()
+	return openTestStoreThrough(t, "")
+}
+
+// openTestStoreThrough is openTestStore with migrations applied only up to
+// last (a filename prefix such as "0005"), to test a later one's backfill.
+func openTestStoreThrough(t *testing.T, last string) *Store {
+	t.Helper()
 	url := testDatabaseURL
 	ctx := t.Context()
 
@@ -44,7 +51,7 @@ func openTestStore(t *testing.T) *Store {
 		t.Fatal(err)
 	}
 	t.Cleanup(s.Close)
-	if err := s.Migrate(ctx); err != nil {
+	if err := s.migrateThrough(ctx, last); err != nil {
 		t.Fatal(err)
 	}
 	return s

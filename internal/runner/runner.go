@@ -85,26 +85,32 @@ func Run(ctx context.Context, cfg Config) error {
 
 	branch, prompt := "main", userPrompt(rc)
 	if rc.Kind == runnerapi.KindChat {
-		if rc.PR == nil {
-			return api.fail(ctx, "chat turn without a PR")
+		if rc.Thread == nil {
+			return api.fail(ctx, "chat turn without a thread")
 		}
-		// The turn continues the conversation that opened the PR; without its
-		// session there is nothing to continue.
-		if err := restoreSession(ctx, api, cfg.Getenv("HOME"), cfg.WorkDir, rc.SessionID); err != nil {
-			return api.fail(ctx, "could not restore the PR's session: "+err.Error())
+		// A thread with a stored session continues it; without its file there
+		// is nothing to continue, so that is a failure, not a fresh start.
+		if rc.Resume {
+			if err := restoreSession(ctx, api, cfg.Getenv("HOME"), cfg.WorkDir, rc.SessionID); err != nil {
+				return api.fail(ctx, "could not restore the conversation's session: "+err.Error())
+			}
 		}
-		branch, prompt = rc.PR.Branch, chatPrompt(rc)
+		prompt = chatPrompt(rc)
+		if rc.PR != nil && rc.PR.State == "open" {
+			branch = rc.PR.Branch
+		}
 	}
 
 	if err := clone(ctx, cfg, branch); err != nil {
 		return api.fail(ctx, "checkout failed: "+err.Error())
 	}
 
-	settings, err := settingsJSON(rc.ProposePR, rc.Consolidate, rc.UpdatePR)
+	settings, err := settingsJSON(rc.ProposePR, rc.Consolidate, rc.UpdatePR, rc.IncidentTools)
 	if err != nil {
 		return api.fail(ctx, err.Error())
 	}
-	mcpConfig, err := mcpConfigJSON(cfg.SelfBin, cfg.WorkDir, cfg.Getenv, cfg.ControllerURL, cfg.RunToken, rc.ProposePR || rc.Consolidate || rc.UpdatePR)
+	mcpConfig, err := mcpConfigJSON(cfg.SelfBin, cfg.WorkDir, cfg.Getenv, cfg.ControllerURL, cfg.RunToken,
+		rc.ProposePR || rc.Consolidate || rc.UpdatePR || rc.IncidentTools)
 	if err != nil {
 		return api.fail(ctx, err.Error())
 	}

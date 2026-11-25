@@ -142,8 +142,8 @@ func itoa(n int64) string { return strconv.FormatInt(n, 10) }
 func TestChatTurnsOutsideAlertCap(t *testing.T) {
 	s := openTestStore(t)
 	ctx := t.Context()
-	pr, _ := openPR(t, s) // one diagnosis started
-	if _, err := s.EnqueueChat(ctx, uiMessage(pr.ID, "why?"), ChatLimits{}); err != nil {
+	_, _, th := openPRThread(t, s) // one diagnosis started
+	if _, err := s.EnqueueChat(ctx, uiMessage(th.ID, "why?"), ChatLimits{}); err != nil {
 		t.Fatal(err)
 	}
 	other := payload("firing", alert("z", "firing"))

@@ -72,6 +72,12 @@ type Store interface {
 	AdvanceCommentsSince(ctx context.Context, prID int64, t time.Time) error
 	MarkChatReacted(ctx context.Context, id int64) error
 	SetChatMessageURL(ctx context.Context, id int64, url string) error
+
+	GetThread(ctx context.Context, id int64) (store.Thread, error)
+	IncidentThread(ctx context.Context, incidentID int64, create bool) (store.Thread, bool, error)
+	CreateGeneralThread(ctx context.Context) (store.Thread, error)
+	RecentThreads(ctx context.Context, limit int) ([]store.Thread, error)
+	HasStoredSession(ctx context.Context, sessionID string, beforeRunID int64) (bool, error)
 }
 
 // Options configure the agent side of the controller.
@@ -89,8 +95,9 @@ type Options struct {
 	// RecentWindow is how far back a run's context lists other incidents,
 	// and how old a resolved incident may be to take a merge.
 	RecentWindow time.Duration
-	// ChatMaxPerPRHour caps the chat turns one PR can start in an hour.
-	ChatMaxPerPRHour int
+	// ChatMaxPerThreadHour caps the chat turns one conversation can start in
+	// an hour.
+	ChatMaxPerThreadHour int
 	// ChatMaxPerHour caps the chat turns all PRs together start in an hour.
 	// Chat turns do not count against the alert runs' RUN_MAX_PER_HOUR.
 	ChatMaxPerHour int
@@ -149,6 +156,10 @@ func (s *Server) UIHandler() http.Handler {
 	mux.HandleFunc("POST /incidents/{id}/unlink", s.uiUnlink)
 	mux.HandleFunc("POST /incidents/{id}/chat", s.uiChat)
 	mux.HandleFunc("GET /runs/{id}/stream", s.runStream)
+	mux.HandleFunc("GET /api/chat/threads", s.apiThreads)
+	mux.HandleFunc("POST /api/chat/threads", s.apiCreateThread)
+	mux.HandleFunc("GET /api/chat/threads/{id}", s.apiThread)
+	mux.HandleFunc("POST /api/chat/threads/{id}/messages", s.apiPostMessage)
 	// The UI has no login (it is tailnet-only), so a form post from another
 	// site in the same browser must not be able to merge incidents.
 	return http.NewCrossOriginProtection().Handler(mux)
@@ -283,17 +294,22 @@ func (s *Server) incidentDetail(w http.ResponseWriter, r *http.Request) {
 	}
 	if p, err := s.store.PullRequestForIncident(ctx, id); err == nil {
 		page.PR = &p
-		page.ChatEnabled = s.prs != nil && p.State == store.PROpen
-		if page.Chat, err = s.store.ChatMessages(ctx, p.ID); err != nil {
+	} else if !errors.Is(err, store.ErrNotFound) {
+		slog.Error("loading PR", "incident", id, "err", err)
+	}
+	// The incident's conversation (its parent's, if merged), if it has one.
+	page.ChatEnabled = true
+	if th, err := s.threadForIncident(ctx, id, false); err == nil {
+		if page.Chat, err = s.store.ChatMessages(ctx, th.ID); err != nil {
 			slog.Error("loading chat", "incident", id, "err", err)
 		}
-		if run, ok, err := s.store.ActiveChatRun(ctx, p.ID); err != nil {
+		if run, ok, err := s.store.ActiveChatRun(ctx, th.ID); err != nil {
 			slog.Error("loading chat turn", "incident", id, "err", err)
 		} else if ok {
 			page.ChatRun = &run
 		}
 	} else if !errors.Is(err, store.ErrNotFound) {
-		slog.Error("loading PR", "incident", id, "err", err)
+		slog.Error("loading thread", "incident", id, "err", err)
 	}
 	if in.ParentID != nil {
 		if parent, _, err := s.store.GetIncident(ctx, *in.ParentID); err == nil {
@@ -334,11 +350,14 @@ func (s *Server) runDetail(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "could not load run", http.StatusInternalServerError)
 		return
 	}
-	in, _, err := s.store.GetIncident(r.Context(), run.IncidentID)
-	if err != nil {
-		slog.Error("loading run incident", "id", id, "err", err)
-		http.Error(w, "could not load incident", http.StatusInternalServerError)
-		return
+	// A general conversation's turn has no incident.
+	var in store.Incident
+	if run.IncidentID != 0 {
+		if in, _, err = s.store.GetIncident(r.Context(), run.IncidentID); err != nil {
+			slog.Error("loading run incident", "id", id, "err", err)
+			http.Error(w, "could not load incident", http.StatusInternalServerError)
+			return
+		}
 	}
 	events, err := s.store.RunEvents(r.Context(), id)
 	if err != nil {

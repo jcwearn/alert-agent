@@ -27,23 +27,27 @@ const ToolServerName = "controller"
 // run its token belongs to, so a tool can never act for another run.
 func (s *Server) mcpHandler() http.Handler {
 	return mcp.NewStreamableHTTPHandler(func(r *http.Request) *mcp.Server {
-		return s.toolServer(runFrom(r))
+		return s.toolServer(r.Context(), runFrom(r))
 	}, &mcp.StreamableHTTPOptions{Stateless: true, JSONResponse: true, MaxRequestBodyBytes: 1 << 20})
 }
 
-func (s *Server) toolServer(run store.Run) *mcp.Server {
+func (s *Server) toolServer(ctx context.Context, run store.Run) *mcp.Server {
 	srv := mcp.NewServer(&mcp.Implementation{Name: ToolServerName, Version: "v1"}, nil)
-	// A chat turn changes only its own PR: no merges, links or new PRs.
+	// A chat turn's tools depend on its thread (see chatScope).
 	if run.Kind == store.KindChat {
-		if s.prs != nil {
-			s.addUpdateTool(srv, run)
-		}
+		s.chatTools(ctx, srv, run)
 		return srv
 	}
 	s.addConsolidationTools(srv, run)
-	if s.prs == nil {
-		return srv
+	if s.prs != nil {
+		s.addProposeTool(srv, run)
 	}
+	return srv
+}
+
+// addProposeTool serves propose_pr: to alert runs, and to a chat turn on an
+// incident that has no PR yet.
+func (s *Server) addProposeTool(srv *mcp.Server, run store.Run) {
 	mcp.AddTool(srv, &mcp.Tool{
 		Name: "propose_pr",
 		Description: "Open a pull request against the GitOps repository with your edits, for a human to review. " +
@@ -57,7 +61,6 @@ func (s *Server) toolServer(run store.Run) *mcp.Server {
 	}, func(ctx context.Context, _ *mcp.CallToolRequest, in ProposeInput) (*mcp.CallToolResult, any, error) {
 		return s.proposeTool(ctx, run, in)
 	})
-	return srv
 }
 
 // proposeTool records the call before acting, then records how it ended.
