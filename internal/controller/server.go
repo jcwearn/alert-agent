@@ -61,6 +61,7 @@ type Store interface {
 
 	GetPullRequest(ctx context.Context, id int64) (store.PullRequest, error)
 	UpdatePullRequestHead(ctx context.Context, id int64, fromSHA, headSHA string, files []string) (bool, error)
+	SetPullRequestTitle(ctx context.Context, id int64, title string) error
 	EnqueueChat(ctx context.Context, m store.ChatMessage, lim store.ChatLimits) (store.ChatEnqueue, error)
 	ChatMessages(ctx context.Context, prID int64) ([]store.ChatMessage, error)
 	TurnMessages(ctx context.Context, runID int64) ([]store.ChatMessage, error)

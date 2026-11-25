@@ -59,6 +59,14 @@ func (f *fakeStore) UpdatePullRequestHead(_ context.Context, id int64, from, hea
 	return true, nil
 }
 
+func (f *fakeStore) SetPullRequestTitle(_ context.Context, id int64, title string) error {
+	p := f.pr()
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.prs[id-1].Title = title
+	return nil
+}
+
 func (f *fakeStore) EnqueueChat(_ context.Context, m store.ChatMessage, _ store.ChatLimits) (store.ChatEnqueue, error) {
 	c := f.chat()
 	if c.failID != 0 && m.GHID == c.failID {
@@ -467,5 +475,72 @@ func TestRunStream(t *testing.T) {
 	}
 	if strings.Contains(string(b), "id: 0\n") || !strings.Contains(string(b), "id: 1\n") {
 		t.Errorf("reconnect replayed from the start:\n%s", b)
+	}
+}
+
+func TestUpdatePRRetitles(t *testing.T) {
+	s, fs, gh, updates := chatServer(t, nil)
+	cs, err := mcpSession(t, s, "chat")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// A bad PR title is refused before anything is committed or pushed.
+	bad := goodUpdate
+	bad.PRTitle = "Make it bigger"
+	if out, isErr := callTool(t, cs, "update_pr", bad); !isErr || !strings.Contains(out, "conventional commit") {
+		t.Fatalf("bad PR title: %s", out)
+	}
+	if len(*updates) != 0 {
+		t.Fatal("a refused PR title still reached prepare")
+	}
+
+	in := goodUpdate
+	in.PRTitle = "fix(ebooks): raise memory limit to 512Mi"
+	out, isErr := callTool(t, cs, "update_pr", in)
+	if isErr || !strings.Contains(out, "Retitled the PR: fix(ebooks): raise memory limit to 512Mi") {
+		t.Fatalf("update with a title: %s", out)
+	}
+	if len(gh.retitled) != 1 || gh.retitled[0] != "#1200 fix(ebooks): raise memory limit to 512Mi" {
+		t.Errorf("GitHub renames = %v", gh.retitled)
+	}
+	if last := gh.perms[len(gh.perms)-1]; last["pull_requests"] != "write" || last["contents"] != "read" || len(last) != 2 {
+		t.Errorf("retitle token permissions = %v", last)
+	}
+	if pr, _ := fs.GetPullRequest(t.Context(), 1); pr.Title != in.PRTitle {
+		t.Errorf("stored title = %q", pr.Title)
+	}
+
+	if status, _ := runnerReq(t, s.RunnerHandler(), http.MethodPost, runnerapi.PathFinish, "chat",
+		`{"status":"succeeded","report":"Now 512Mi."}`); status != http.StatusNoContent {
+		t.Fatal(status)
+	}
+	msgs := fs.chat().messages
+	if reply := msgs[len(msgs)-1].Body; !strings.Contains(reply, "Pushed `head2`: fix(ebooks): use 512Mi instead\nRetitled the PR: fix(ebooks): raise memory limit to 512Mi") {
+		t.Errorf("reply footer = %q", reply)
+	}
+}
+
+// A rename that fails after the commit landed is not a failed update: the
+// agent is told the title is unchanged, and the footer does not claim it.
+func TestUpdatePRRetitleFailure(t *testing.T) {
+	s, fs, gh, _ := chatServer(t, nil)
+	gh.retitleErr = errors.New("GitHub answered 403")
+	cs, err := mcpSession(t, s, "chat")
+	if err != nil {
+		t.Fatal(err)
+	}
+	in := goodUpdate
+	in.PRTitle = "fix(ebooks): raise memory limit to 512Mi"
+	out, isErr := callTool(t, cs, "update_pr", in)
+	if isErr || !strings.HasPrefix(out, "Pushed head2") || !strings.Contains(out, "could NOT be changed") ||
+		!strings.Contains(out, "fix(ebooks): raise memory") {
+		t.Fatalf("update with a failed rename: %s", out)
+	}
+	if pr, _ := fs.GetPullRequest(t.Context(), 1); pr.Title != "fix(ebooks): raise memory" {
+		t.Errorf("stored title changed to %q", pr.Title)
+	}
+	if footer := s.pushedFooter(t.Context(), fs.runs[9]); strings.Contains(footer, "Retitled") {
+		t.Errorf("footer claims a rename: %q", footer)
 	}
 }

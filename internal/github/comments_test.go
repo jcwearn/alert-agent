@@ -114,3 +114,21 @@ func TestReactAndReply(t *testing.T) {
 		t.Errorf("calls = %v\nwant %v", calls, want)
 	}
 }
+
+func TestUpdatePullRequestTitle(t *testing.T) {
+	var method, path, title string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var body map[string]string
+		_ = json.NewDecoder(r.Body).Decode(&body)
+		method, path, title = r.Method, r.URL.Path, body["title"]
+		_, _ = w.Write([]byte(`{"number":12}`))
+	}))
+	t.Cleanup(srv.Close)
+	a := &App{BaseURL: srv.URL}
+	if err := a.UpdatePullRequestTitle(t.Context(), "tok", "o/r", 12, "fix(x): y"); err != nil {
+		t.Fatal(err)
+	}
+	if method != http.MethodPatch || path != "/repos/o/r/pulls/12" || title != "fix(x): y" {
+		t.Errorf("request = %s %s %q", method, path, title)
+	}
+}

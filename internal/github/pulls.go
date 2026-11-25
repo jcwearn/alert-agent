@@ -40,6 +40,13 @@ func (a *App) CreatePullRequest(ctx context.Context, token, repo string, pr NewP
 	return out, err
 }
 
+// UpdatePullRequestTitle renames a PR. The title becomes the squash commit's
+// subject, so it must keep matching what the PR does.
+func (a *App) UpdatePullRequestTitle(ctx context.Context, token, repo string, number int, title string) error {
+	return a.api(ctx, token, http.MethodPatch, "/repos/"+repo+"/pulls/"+strconv.Itoa(number),
+		map[string]string{"title": title}, http.StatusOK, nil)
+}
+
 // GetPullRequest reads one PR.
 func (a *App) GetPullRequest(ctx context.Context, token, repo string, number int) (PullRequest, error) {
 	var out PullRequest

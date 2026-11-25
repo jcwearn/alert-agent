@@ -355,6 +355,7 @@ To change the PR (MCP server "controller", tool update_pr):
 1. Edit the files in the checkout with Edit or Write. Only apps/ and infrastructure/ may change; never encrypted *.sops.yaml files, and never apps/alert-agent/. Follow CLAUDE.md's conventions.
 2. Call git_diff and pass its output, unchanged, as the patch.
 3. Call update_pr with a conventional commit title for the new commit (e.g. "fix(ebooks): use 512Mi instead"). It is published on a public mirror: no hostnames, addresses or tailnet names in it.
+4. If the change makes the PR's title wrong (it names a value or approach you just changed), also pass pr_title with a corrected title in the same form (e.g. "fix(ebooks): raise calibre memory limit to 512Mi"). A squash merge publishes the PR title, so it must describe the final change. The PR description is not updated; mention in your reply if it is now out of date.
 The controller commits it to the same branch through the repository's hooks, and the PR updates. If update_pr refuses, read the reason, fix the cause and try again; after three refusals, stop and say what you would change instead. You cannot merge, approve or close the PR, and you cannot open another one.
 
 Your final message is posted to the reviewer verbatim as your reply. Write it as a reply in a conversation, in concise Markdown, not as a report: answer the question directly, draw on what you found earlier, and say what you changed. Never say you pushed a commit unless update_pr succeeded in this turn.`

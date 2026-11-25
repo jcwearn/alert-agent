@@ -24,6 +24,9 @@ import (
 type UpdateInput struct {
 	Title string `json:"title" jsonschema:"conventional commit subject for the new commit, at most 72 characters, e.g. fix(ebooks): use 512Mi instead. It is published: no hostnames, addresses or tailnet names"`
 	Patch string `json:"patch" jsonschema:"the exact output of the git_diff tool, unchanged"`
+	// PRTitle renames the PR once the commit lands, when the change makes the
+	// current title wrong (it says 384Mi and the PR now sets 512Mi).
+	PRTitle string `json:"pr_title,omitempty" jsonschema:"optional new PR title, when this change makes the current one inaccurate; a conventional commit subject like the original. A squash merge publishes it on the public mirror: no hostnames, addresses or tailnet names"`
 }
 
 // maxUpdateAttempts bounds update_pr calls per chat turn, refusals included.
@@ -90,7 +93,8 @@ func (s *Server) addUpdateTool(srv *mcp.Server, run store.Run) {
 			"Edit the files in the checkout (it is the PR branch), call git_diff, and pass its output unchanged as patch. " +
 			"The controller applies it on the PR branch's head, refuses anything outside apps/ and infrastructure/, " +
 			"encrypted secrets and the agent's own manifests, runs the repository's commit hooks, and pushes the commit " +
-			"to the same branch (never forcing). On a refusal, fix the cause and call again; at most 3 calls per turn. " +
+			"to the same branch (never forcing). When the change makes the PR's title wrong, pass pr_title and the " +
+			"controller renames the PR after the commit lands. On a refusal, fix the cause and call again; at most 3 calls per turn. " +
 			"The agent can never merge, approve or close a PR.",
 		Annotations: &mcp.ToolAnnotations{DestructiveHint: ptr(false), OpenWorldHint: ptr(true)},
 	}, func(ctx context.Context, _ *mcp.CallToolRequest, in UpdateInput) (*mcp.CallToolResult, any, error) {
@@ -115,6 +119,14 @@ func (s *Server) updateTool(ctx context.Context, run store.Run, in UpdateInput) 
 	case err == nil:
 		msg := fmt.Sprintf("%s%s to %s (PR #%d, %s).\nThe PR now changes: %s\nSay in your reply what this commit changed.",
 			pushedPrefix, sha, pr.Branch, pr.Number, pr.URL, strings.Join(pr.Files, ", "))
+		if in.PRTitle != "" {
+			if terr := s.retitle(ctx, pr, in.PRTitle); terr != nil {
+				slog.Error("retitling PR", "run", run.ID, "pr", pr.Number, "err", terr)
+				msg += "\nThe commit landed, but the PR title could NOT be changed (the controller's error is logged). Tell the reviewer the title is still: " + pr.Title
+			} else {
+				msg += "\n" + retitledPrefix + in.PRTitle
+			}
+		}
 		s.finishAction(ctx, actionID, store.ActionSucceeded, msg)
 		return toolText(msg), nil, nil
 	case errors.As(err, &rejected):
@@ -128,6 +140,25 @@ func (s *Server) updateTool(ctx context.Context, run store.Run, in UpdateInput) 
 		slog.Error("update failed", "run", run.ID, "err", err)
 		return toolError("The controller failed to update the PR (its error is logged). Do not retry; describe the change in your reply."), nil, nil
 	}
+}
+
+// retitledPrefix marks a successful rename in update_pr's result, which the
+// reply footer reads back.
+const retitledPrefix = "Retitled the PR: "
+
+// retitle renames the PR on GitHub and records it. The title was checked
+// before the commit was pushed.
+func (s *Server) retitle(ctx context.Context, pr store.PullRequest, title string) error {
+	p := s.prs
+	tok, err := p.GitHub.InstallationToken(ctx, []string{p.repoName()}, map[string]string{"pull_requests": "write", "contents": "read"})
+	if err != nil {
+		return fmt.Errorf("github token: %w", err)
+	}
+	if err := p.GitHub.UpdatePullRequestTitle(ctx, tok.Token, p.Repo, pr.Number, title); err != nil {
+		return err
+	}
+	slog.Info("PR retitled", "pr", pr.Number, "title", title)
+	return s.store.SetPullRequestTitle(ctx, pr.ID, title)
 }
 
 // updatePR is update_pr: validate, commit on the PR branch through the hooks,
@@ -167,6 +198,12 @@ func (s *Server) updatePR(ctx context.Context, run store.Run, in UpdateInput) (s
 	}
 	if err := proposal.CheckPatch(in.Patch); err != nil {
 		return pr, "", err
+	}
+	// Checked before anything is pushed, like the commit title.
+	if in.PRTitle != "" {
+		if err := proposal.CheckTitle(in.PRTitle); err != nil {
+			return pr, "", err
+		}
 	}
 
 	write, err := p.GitHub.InstallationToken(ctx, []string{p.repoName()}, map[string]string{"contents": "write"})
@@ -248,6 +285,9 @@ func (s *Server) pushedFooter(ctx context.Context, run store.Run) string {
 		var in UpdateInput
 		_ = json.Unmarshal(a.Input, &in)
 		lines = append(lines, fmt.Sprintf("Pushed %#q: %s", shortSHA(sha), in.Title))
+		if in.PRTitle != "" && strings.Contains(a.Result, "\n"+retitledPrefix) {
+			lines = append(lines, retitledPrefix+in.PRTitle)
+		}
 	}
 	return strings.Join(lines, "\n")
 }
