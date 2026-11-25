@@ -54,6 +54,7 @@ for device in desktop phone; do
 	shot incident-open "$device" light "/incidents/25?chat=open&thread=1"
 	shot switcher "$device" light "/incidents/25?chat=open&thread=1&menu=1"
 	shot other-thread "$device" light "/incidents/26?chat=open&thread=2"
+	shot incident-thread-on-home "$device" light "/?chat=open&thread=1"
 	shot streaming "$device" light "/?chat=open&thread=4"
 	shot new-general "$device" light "/?chat=open&pending=general"
 	shot new-incident "$device" light "/incidents/27?chat=open"
