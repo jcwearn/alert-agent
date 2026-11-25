@@ -43,8 +43,11 @@ type Run struct {
 	NumTurns   *int
 	DurationMS *int64
 	Kind       string
-	// PRID is the PR a chat turn is about.
+	// PRID is the open PR of a chat turn's incident when it was queued.
 	PRID *int64
+	// ThreadID is a chat turn's thread. A general thread's turns have no
+	// incident: IncidentID is 0.
+	ThreadID *int64
 }
 
 // RunEvent is one line of a run's transcript.
@@ -65,13 +68,13 @@ type RunResult struct {
 	Usage      json.RawMessage
 }
 
-const runColumns = `id, incident_id, status, session_id::text, job_name, model, created_at,
-	started_at, finished_at, report, error, num_turns, duration_ms, kind, pr_id`
+const runColumns = `id, COALESCE(incident_id, 0), status, session_id::text, job_name, model, created_at,
+	started_at, finished_at, report, error, num_turns, duration_ms, kind, pr_id, thread_id`
 
 func scanRun(row pgx.Row) (Run, error) {
 	var r Run
 	err := row.Scan(&r.ID, &r.IncidentID, &r.Status, &r.SessionID, &r.JobName, &r.Model, &r.CreatedAt,
-		&r.StartedAt, &r.FinishedAt, &r.Report, &r.Error, &r.NumTurns, &r.DurationMS, &r.Kind, &r.PRID)
+		&r.StartedAt, &r.FinishedAt, &r.Report, &r.Error, &r.NumTurns, &r.DurationMS, &r.Kind, &r.PRID, &r.ThreadID)
 	return r, err
 }
 
@@ -136,8 +139,8 @@ const liveMember = `EXISTS (SELECT 1 FROM run_incidents ri JOIN incidents i ON i
 // primary.
 //
 // Chat turns go first: a reviewer is waiting on them, and a new alert's run
-// can wait a turn. Chat runs keep their incident and are skipped only when
-// their PR is no longer open.
+// can wait a turn. Chat runs keep their incident (a general thread's have
+// none) and are skipped only when their thread is archived.
 //
 // It returns false when nothing is ready, or when a run is already running
 // (the runs_one_running index refuses a second one).
@@ -164,18 +167,18 @@ func (s *Store) claim(ctx context.Context, tokenHash []byte, jobPrefix, model st
 		); err != nil {
 			return fmt.Errorf("skip resolved: %w", err)
 		}
-		// A chat turn outlives its alert (PRs are reviewed after the fact),
-		// but not its PR.
+		// A chat turn outlives its alert and its PR; only an archived thread
+		// drops it.
 		if _, err := tx.Exec(ctx, `
 			WITH skipped AS (
 				UPDATE runs r SET status = 'skipped', finished_at = now(),
-					error = 'the PR was merged or closed before the turn started'
+					error = 'the conversation was archived before the turn started'
 				WHERE r.status = 'queued' AND r.kind = 'chat'
-					AND NOT EXISTS (SELECT 1 FROM pull_requests p WHERE p.id = r.pr_id AND p.state = 'open')
+					AND EXISTS (SELECT 1 FROM threads t WHERE t.id = r.thread_id AND t.archived_at IS NOT NULL)
 				RETURNING r.id)
 			UPDATE chat_messages SET status = 'failed' WHERE run_id IN (SELECT id FROM skipped)`,
 		); err != nil {
-			return fmt.Errorf("skip closed-PR chats: %w", err)
+			return fmt.Errorf("skip archived chats: %w", err)
 		}
 
 		var running bool

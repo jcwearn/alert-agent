@@ -32,11 +32,15 @@ const (
 	GHReview        = "review"
 )
 
-// ChatMessage is one message in a PR's conversation.
+// ChatMessage is one message in a thread.
 type ChatMessage struct {
-	ID     int64
-	PRID   int64
-	RunID  *int64
+	ID       int64
+	ThreadID int64
+	// PRID is the PR a GitHub comment (or a reply to one) is on; 0 otherwise.
+	PRID  int64
+	RunID *int64
+	// Page is the UI path the message was sent from, if any.
+	Page   string
 	Source string
 	Author string
 	Body   string
@@ -53,12 +57,12 @@ type ChatMessage struct {
 	CreatedAt  time.Time
 }
 
-const chatColumns = `id, pr_id, run_id, source, author, body, status, COALESCE(gh_kind, ''), COALESCE(gh_id, 0),
+const chatColumns = `id, thread_id, COALESCE(pr_id, 0), run_id, page, source, author, body, status, COALESCE(gh_kind, ''), COALESCE(gh_id, 0),
 	COALESCE(gh_thread_id, 0), path, line, diff_hunk, html_url, reacted_at, created_at`
 
 func scanChat(row pgx.Row) (ChatMessage, error) {
 	var m ChatMessage
-	err := row.Scan(&m.ID, &m.PRID, &m.RunID, &m.Source, &m.Author, &m.Body, &m.Status, &m.GHKind, &m.GHID,
+	err := row.Scan(&m.ID, &m.ThreadID, &m.PRID, &m.RunID, &m.Page, &m.Source, &m.Author, &m.Body, &m.Status, &m.GHKind, &m.GHID,
 		&m.GHThreadID, &m.Path, &m.Line, &m.DiffHunk, &m.HTMLURL, &m.ReactedAt, &m.CreatedAt)
 	return m, err
 }
@@ -81,9 +85,9 @@ func collectChat(rows pgx.Rows, err error) ([]ChatMessage, error) {
 
 // ChatLimits bound how many turns a reviewer can start.
 type ChatLimits struct {
-	// PerPRHour caps the turns started for one PR in an hour.
-	PerPRHour int
-	// AllHour caps the chat turns all PRs together can start in an hour.
+	// PerThreadHour caps the turns started for one thread in an hour.
+	PerThreadHour int
+	// AllHour caps the chat turns all threads together can start in an hour.
 	// Alert runs have their own cap in the dispatcher.
 	AllHour int
 }
@@ -103,52 +107,57 @@ type ChatEnqueue struct {
 	Duplicate bool
 }
 
-// ErrPRNotOpen refuses a message about a PR that is merged or closed.
-var ErrPRNotOpen = errors.New("the PR is no longer open")
+// ErrThreadArchived refuses a message to an archived thread.
+var ErrThreadArchived = errors.New("the thread is archived")
 
-// EnqueueChat records a reviewer's message and gives it a turn: the PR's
-// waiting turn if it has one, or a new chat run within the limits. A new
-// turn resumes the session of the run that opened the PR.
+// EnqueueChat records a reviewer's message in its thread and gives it a
+// turn: the thread's waiting turn if it has one, or a new chat run within
+// the limits. A new turn continues the thread's session, and carries the
+// open PR of the thread's incident, if there is one.
 func (s *Store) EnqueueChat(ctx context.Context, m ChatMessage, lim ChatLimits) (ChatEnqueue, error) {
 	var res ChatEnqueue
 	err := pgx.BeginFunc(ctx, s.pool, func(tx pgx.Tx) error {
 		res = ChatEnqueue{}
-		if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtext('alert-agent chat'), $1::int)`, m.PRID); err != nil {
+		if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtext('alert-agent chat'), $1::int)`, m.ThreadID); err != nil {
 			return err
 		}
-		var (
-			incidentID, prRunID int64
-			state               string
-		)
-		if err := tx.QueryRow(ctx, `SELECT incident_id, run_id, state FROM pull_requests WHERE id = $1`, m.PRID).
-			Scan(&incidentID, &prRunID, &state); err != nil {
+		var archived *time.Time
+		if err := tx.QueryRow(ctx, `SELECT archived_at FROM threads WHERE id = $1`, m.ThreadID).Scan(&archived); err != nil {
 			if errors.Is(err, pgx.ErrNoRows) {
 				return ErrNotFound
 			}
 			return err
 		}
-		if state != PROpen {
-			return ErrPRNotOpen
+		if archived != nil {
+			return ErrThreadArchived
 		}
 
 		insert := func(runID *int64, status string) error {
 			err := tx.QueryRow(ctx, `
-				INSERT INTO chat_messages (pr_id, run_id, source, author, body, status, gh_kind, gh_id,
+				INSERT INTO chat_messages (thread_id, pr_id, run_id, page, source, author, body, status, gh_kind, gh_id,
 					gh_thread_id, path, line, diff_hunk, html_url)
-				VALUES ($1, $2, $3, $4, $5, $6, NULLIF($7::text, ''), NULLIF($8::bigint, 0), NULLIF($9::bigint, 0), $10, $11, $12, $13)
+				VALUES ($1, NULLIF($2::bigint, 0), $3, $4, $5, $6, $7, $8, NULLIF($9::text, ''), NULLIF($10::bigint, 0),
+					NULLIF($11::bigint, 0), $12, $13, $14, $15)
 				ON CONFLICT (gh_kind, gh_id) DO NOTHING
 				RETURNING id`,
-				m.PRID, runID, m.Source, m.Author, m.Body, status, m.GHKind, m.GHID, m.GHThreadID,
+				m.ThreadID, m.PRID, runID, m.Page, m.Source, m.Author, m.Body, status, m.GHKind, m.GHID, m.GHThreadID,
 				m.Path, m.Line, m.DiffHunk, m.HTMLURL).Scan(&res.MessageID)
 			if errors.Is(err, pgx.ErrNoRows) {
 				res.Duplicate = true
 				return nil
 			}
+			if err != nil {
+				return err
+			}
+			// A general thread is named after its first message.
+			_, err = tx.Exec(ctx, `UPDATE threads SET updated_at = now(),
+				title = CASE WHEN title = '' AND kind = 'general' THEN left($2, 80) ELSE title END
+				WHERE id = $1`, m.ThreadID, m.Body)
 			return err
 		}
 
 		var waiting int64
-		err := tx.QueryRow(ctx, `SELECT id FROM runs WHERE pr_id = $1 AND kind = 'chat' AND status = 'queued'`, m.PRID).Scan(&waiting)
+		err := tx.QueryRow(ctx, `SELECT id FROM runs WHERE thread_id = $1 AND kind = 'chat' AND status = 'queued'`, m.ThreadID).Scan(&waiting)
 		switch {
 		case err == nil:
 			res.RunID = waiting
@@ -157,24 +166,24 @@ func (s *Store) EnqueueChat(ctx context.Context, m ChatMessage, lim ChatLimits) 
 			return err
 		}
 
-		var prTurns, allTurns int
-		var prOldest, allOldest *time.Time
+		var threadTurns, allTurns int
+		var threadOldest, allOldest *time.Time
 		const recentTurns = `FROM runs WHERE kind = 'chat' AND status <> 'skipped' AND created_at > now() - interval '1 hour'`
-		if err := tx.QueryRow(ctx, `SELECT count(*), min(created_at) `+recentTurns+` AND pr_id = $1`, m.PRID).
-			Scan(&prTurns, &prOldest); err != nil {
+		if err := tx.QueryRow(ctx, `SELECT count(*), min(created_at) `+recentTurns+` AND thread_id = $1`, m.ThreadID).
+			Scan(&threadTurns, &threadOldest); err != nil {
 			return err
 		}
 		if err := tx.QueryRow(ctx, `SELECT count(*), min(created_at) `+recentTurns).Scan(&allTurns, &allOldest); err != nil {
 			return err
 		}
 		switch {
-		case lim.PerPRHour > 0 && prTurns >= lim.PerPRHour:
-			res.Capped = fmt.Sprintf("this PR already had %d agent turns in the last hour (the limit)", prTurns)
-			if prOldest != nil {
-				res.RetryAt = prOldest.Add(time.Hour)
+		case lim.PerThreadHour > 0 && threadTurns >= lim.PerThreadHour:
+			res.Capped = fmt.Sprintf("this conversation already had %d agent turns in the last hour (the limit)", threadTurns)
+			if threadOldest != nil {
+				res.RetryAt = threadOldest.Add(time.Hour)
 			}
 		case lim.AllHour > 0 && allTurns >= lim.AllHour:
-			res.Capped = fmt.Sprintf("the agent already took %d chat turns in the last hour (the limit across all PRs)", allTurns)
+			res.Capped = fmt.Sprintf("the agent already took %d chat turns in the last hour (the limit across all conversations)", allTurns)
 			if allOldest != nil {
 				res.RetryAt = allOldest.Add(time.Hour)
 			}
@@ -187,15 +196,21 @@ func (s *Store) EnqueueChat(ctx context.Context, m ChatMessage, lim ChatLimits) 
 		if err := insert(nil, ChatQueued); err != nil || res.Duplicate {
 			return err
 		}
+		var incidentID *int64
 		if err := tx.QueryRow(ctx, `
-			INSERT INTO runs (incident_id, status, kind, pr_id, session_id)
-			SELECT $1, 'queued', 'chat', $2, session_id FROM runs WHERE id = $3
-			RETURNING id`, incidentID, m.PRID, prRunID).Scan(&res.RunID); err != nil {
+			INSERT INTO runs (incident_id, status, kind, thread_id, pr_id, session_id)
+			SELECT t.incident_id, 'queued', 'chat', t.id,
+				(SELECT p.id FROM pull_requests p WHERE p.incident_id = t.incident_id AND p.state = 'open'),
+				t.session_id
+			FROM threads t WHERE t.id = $1
+			RETURNING id, incident_id`, m.ThreadID).Scan(&res.RunID, &incidentID); err != nil {
 			return fmt.Errorf("insert chat run: %w", err)
 		}
 		res.NewRun = true
-		if _, err := tx.Exec(ctx, `INSERT INTO run_incidents (run_id, incident_id) VALUES ($1, $2)`, res.RunID, incidentID); err != nil {
-			return err
+		if incidentID != nil {
+			if _, err := tx.Exec(ctx, `INSERT INTO run_incidents (run_id, incident_id) VALUES ($1, $2)`, res.RunID, *incidentID); err != nil {
+				return err
+			}
 		}
 		_, err = tx.Exec(ctx, `UPDATE chat_messages SET run_id = $2 WHERE id = $1`, res.MessageID, res.RunID)
 		return err
@@ -203,9 +218,9 @@ func (s *Store) EnqueueChat(ctx context.Context, m ChatMessage, lim ChatLimits) 
 	return res, err
 }
 
-// ChatMessages returns a PR's conversation, oldest first.
-func (s *Store) ChatMessages(ctx context.Context, prID int64) ([]ChatMessage, error) {
-	return collectChat(s.pool.Query(ctx, `SELECT `+chatColumns+` FROM chat_messages WHERE pr_id = $1 ORDER BY id`, prID))
+// ChatMessages returns a thread's conversation, oldest first.
+func (s *Store) ChatMessages(ctx context.Context, threadID int64) ([]ChatMessage, error) {
+	return collectChat(s.pool.Query(ctx, `SELECT `+chatColumns+` FROM chat_messages WHERE thread_id = $1 ORDER BY id`, threadID))
 }
 
 // TurnMessages returns the reviewer's messages a chat turn answers.
@@ -225,8 +240,10 @@ func (s *Store) FinishChatTurn(ctx context.Context, runID int64, answered bool, 
 		if !answered {
 			status = ChatFailed
 		}
-		var prID int64
-		if err := tx.QueryRow(ctx, `SELECT pr_id FROM runs WHERE id = $1 AND kind = 'chat' FOR UPDATE`, runID).Scan(&prID); err != nil {
+		var threadID int64
+		var prID *int64
+		if err := tx.QueryRow(ctx, `SELECT thread_id, pr_id FROM runs WHERE id = $1 AND kind = 'chat' FOR UPDATE`, runID).
+			Scan(&threadID, &prID); err != nil {
 			return err
 		}
 		var exists bool
@@ -238,8 +255,8 @@ func (s *Store) FinishChatTurn(ctx context.Context, runID int64, answered bool, 
 			return err
 		}
 		m, err := scanChat(tx.QueryRow(ctx, `
-			INSERT INTO chat_messages (pr_id, run_id, source, author, body, status)
-			VALUES ($1, $2, 'agent', 'agent', $3, 'reply') RETURNING `+chatColumns, prID, runID, reply))
+			INSERT INTO chat_messages (thread_id, pr_id, run_id, source, author, body, status)
+			VALUES ($1, $2, $3, 'agent', 'agent', $4, 'reply') RETURNING `+chatColumns, threadID, prID, runID, reply))
 		if err != nil {
 			return err
 		}
@@ -263,10 +280,10 @@ func (s *Store) LatestSession(ctx context.Context, sessionID string, beforeRunID
 	return gz, err
 }
 
-// ActiveChatRun returns the PR's chat turn that is waiting or running, if any.
-func (s *Store) ActiveChatRun(ctx context.Context, prID int64) (Run, bool, error) {
+// ActiveChatRun returns the thread's chat turn that is waiting or running, if any.
+func (s *Store) ActiveChatRun(ctx context.Context, threadID int64) (Run, bool, error) {
 	r, err := scanRun(s.pool.QueryRow(ctx, `SELECT `+runColumns+` FROM runs
-		WHERE pr_id = $1 AND kind = 'chat' AND status IN ('queued', 'running') ORDER BY id LIMIT 1`, prID))
+		WHERE thread_id = $1 AND kind = 'chat' AND status IN ('queued', 'running') ORDER BY id LIMIT 1`, threadID))
 	if errors.Is(err, pgx.ErrNoRows) {
 		return Run{}, false, nil
 	}

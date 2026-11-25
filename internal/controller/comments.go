@@ -200,6 +200,11 @@ func (s *Server) fetchComments(ctx context.Context, token string, pr store.PullR
 // or a short reply when a limit refused it. It reports whether a turn now
 // has it, and an error only when the comment could not be recorded.
 func (s *Server) takeComment(ctx context.Context, token string, pr store.PullRequest, m store.ChatMessage) (bool, error) {
+	th, err := s.threadForIncident(ctx, pr.IncidentID, true)
+	if err != nil {
+		return false, err
+	}
+	m.ThreadID = th.ID
 	res, err := s.store.EnqueueChat(ctx, m, s.chatLimits())
 	switch {
 	case err != nil:

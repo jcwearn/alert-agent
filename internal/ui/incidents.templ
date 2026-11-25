@@ -197,9 +197,7 @@ templ IncidentDetail(p IncidentPage) {
 				</dl>
 			</div>
 		}
-		if p.PR != nil {
-			@chatPanel(p)
-		}
+		@chatPanel(p)
 		@related(p)
 		@runList(p.Runs)
 		<h2>Alerts ({ strconv.Itoa(len(p.Alerts)) })</h2>

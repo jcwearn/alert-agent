@@ -22,6 +22,12 @@ const migrationLock = 7_416_323_011
 // Migrate applies every embedded migration not yet recorded, in filename
 // order, each in its own transaction.
 func (s *Store) Migrate(ctx context.Context) error {
+	return s.migrateThrough(ctx, "")
+}
+
+// migrateThrough applies migrations up to and including the one whose name
+// starts with last ("" for all). Tests use it to build an older schema.
+func (s *Store) migrateThrough(ctx context.Context, last string) error {
 	if _, err := s.pool.Exec(ctx, `CREATE TABLE IF NOT EXISTS schema_migrations (
 		name       text PRIMARY KEY,
 		applied_at timestamptz NOT NULL DEFAULT now()
@@ -43,6 +49,9 @@ func (s *Store) Migrate(ctx context.Context) error {
 		}
 		if err := s.applyMigration(ctx, name, string(sql)); err != nil {
 			return fmt.Errorf("migration %s: %w", name, err)
+		}
+		if last != "" && strings.HasPrefix(name, last) {
+			return nil
 		}
 	}
 	return nil

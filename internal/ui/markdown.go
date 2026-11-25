@@ -19,13 +19,23 @@ import (
 // html.WithUnsafe() here.
 func markdown(s string) templ.Component {
 	return templ.ComponentFunc(func(_ context.Context, w io.Writer) error {
-		src := []byte(s)
-		doc := parser.New(parser.WithExtensions(extension.NewGFMParser())).Parse(src)
-		var buf bytes.Buffer
-		if err := html.New(html.WithExtensions(extension.NewGFMHTMLRenderer())).Render(&buf, src, doc); err != nil {
+		out, err := MarkdownHTML(s)
+		if err != nil {
 			return err
 		}
-		_, err := w.Write(buf.Bytes())
+		_, err = io.WriteString(w, out)
 		return err
 	})
+}
+
+// MarkdownHTML is markdown for the chat API, which sends replies already
+// rendered: the same safe renderer, as a string.
+func MarkdownHTML(s string) (string, error) {
+	src := []byte(s)
+	doc := parser.New(parser.WithExtensions(extension.NewGFMParser())).Parse(src)
+	var buf bytes.Buffer
+	if err := html.New(html.WithExtensions(extension.NewGFMHTMLRenderer())).Render(&buf, src, doc); err != nil {
+		return "", err
+	}
+	return buf.String(), nil
 }

@@ -71,12 +71,12 @@ func (s *Server) runnerContext(w http.ResponseWriter, r *http.Request) {
 const maxRecent = 25
 
 func (s *Server) buildContext(ctx context.Context, run store.Run) (runnerapi.Context, error) {
+	if run.Kind == store.KindChat {
+		return s.chatContext(ctx, run)
+	}
 	in, alerts, err := s.store.GetIncident(ctx, run.IncidentID)
 	if err != nil {
 		return runnerapi.Context{}, err
-	}
-	if run.Kind == store.KindChat {
-		return s.chatContext(ctx, run, in)
 	}
 	rc := runnerapi.Context{
 		Kind:        runnerapi.KindDiagnose,

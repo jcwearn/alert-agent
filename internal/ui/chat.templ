@@ -37,8 +37,8 @@ templ chatPanel(p IncidentPage) {
 	<div class="chat">
 		if len(p.Chat) == 0 && p.ChatEnabled {
 			<p class="muted hint">
-				Ask the agent about this PR, or ask it to change something: it continues the session that opened the PR,
-				and a change becomes a new commit on the same branch.
+				Ask the agent about this incident. It continues its own investigation of it; if there is a PR, a requested
+				change becomes a new commit on it, and if there is none, it can open one.
 			</p>
 		}
 		for _, m := range p.Chat {

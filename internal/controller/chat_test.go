@@ -28,6 +28,48 @@ type chatState struct {
 	sessions   map[string][]byte
 	activeChat *store.Run
 	failID     int64 // EnqueueChat fails for this GitHub comment id
+	threads    []store.Thread
+}
+
+func (f *fakeStore) GetThread(_ context.Context, id int64) (store.Thread, error) {
+	for _, t := range f.chat().threads {
+		if t.ID == id {
+			return t, nil
+		}
+	}
+	return store.Thread{}, store.ErrNotFound
+}
+
+func (f *fakeStore) IncidentThread(_ context.Context, incidentID int64, create bool) (store.Thread, bool, error) {
+	c := f.chat()
+	for _, t := range c.threads {
+		if t.IncidentID != nil && *t.IncidentID == incidentID {
+			return t, true, nil
+		}
+	}
+	if !create {
+		return store.Thread{}, false, store.ErrNotFound
+	}
+	id := incidentID
+	t := store.Thread{ID: int64(len(c.threads) + 1), Kind: store.ThreadIncident, IncidentID: &id, SessionID: "fresh-session"}
+	c.threads = append(c.threads, t)
+	return t, false, nil
+}
+
+func (f *fakeStore) CreateGeneralThread(context.Context) (store.Thread, error) {
+	c := f.chat()
+	t := store.Thread{ID: int64(len(c.threads) + 1), Kind: store.ThreadGeneral, SessionID: "general-session"}
+	c.threads = append(c.threads, t)
+	return t, nil
+}
+
+func (f *fakeStore) RecentThreads(context.Context, int) ([]store.Thread, error) {
+	return f.chat().threads, nil
+}
+
+func (f *fakeStore) HasStoredSession(_ context.Context, sessionID string, _ int64) (bool, error) {
+	_, ok := f.chat().sessions[sessionID]
+	return ok, nil
 }
 
 func (f *fakeStore) chat() *chatState {
@@ -82,10 +124,10 @@ func (f *fakeStore) EnqueueChat(_ context.Context, m store.ChatMessage, _ store.
 	return res, nil
 }
 
-func (f *fakeStore) ChatMessages(_ context.Context, prID int64) ([]store.ChatMessage, error) {
+func (f *fakeStore) ChatMessages(_ context.Context, threadID int64) ([]store.ChatMessage, error) {
 	var out []store.ChatMessage
 	for _, m := range f.chat().messages {
-		if m.PRID == prID {
+		if m.ThreadID == threadID {
 			out = append(out, m)
 		}
 	}
@@ -118,8 +160,12 @@ func (f *fakeStore) FinishChatTurn(_ context.Context, runID int64, answered bool
 			m.Status = status
 		}
 	}
-	m := store.ChatMessage{ID: int64(len(c.messages) + 1), PRID: *f.runs[runID].PRID, RunID: &runID, Source: store.SourceAgent,
+	run := f.runs[runID]
+	m := store.ChatMessage{ID: int64(len(c.messages) + 1), ThreadID: *run.ThreadID, RunID: &runID, Source: store.SourceAgent,
 		Body: reply, Status: store.ChatReply}
+	if run.PRID != nil {
+		m.PRID = *run.PRID
+	}
 	c.messages = append(c.messages, m)
 	return m, true, nil
 }
@@ -151,8 +197,9 @@ func (f *fakeStore) RunEventsAfter(_ context.Context, runID int64, seq int) ([]s
 
 const chatSession = "11111111-2222-3333-4444-555555555555"
 
-// chatServer is prServer with PR #1200 (row 1) open for incident 3, and run
-// 9, a running chat turn on it (token "chat") with two messages.
+// chatServer is prServer with PR #1200 (row 1) open for incident 3, its
+// thread 1, and run 9, a running chat turn in it (token "chat") with two
+// messages.
 func chatServer(t *testing.T, prepareErr error) (*Server, *fakeStore, *fakeGitHub, *[]proposal.UpdateRequest) {
 	t.Helper()
 	s, fs, gh, _ := prServer(t, nil)
@@ -174,16 +221,19 @@ func chatServer(t *testing.T, prepareErr error) (*Server, *fakeStore, *fakeGitHu
 		Files: []string{"apps/ebooks/deployment.yaml"}}); err != nil {
 		t.Fatal(err)
 	}
-	prID, run := int64(1), int64(9)
-	fs.runs[run] = store.Run{ID: run, IncidentID: 3, Status: store.RunRunning, Kind: store.KindChat, PRID: &prID,
+	prID, run, threadID, incident := int64(1), int64(9), int64(1), int64(3)
+	fs.runs[run] = store.Run{ID: run, IncidentID: 3, Status: store.RunRunning, Kind: store.KindChat, PRID: &prID, ThreadID: &threadID,
 		SessionID: chatSession, Model: "opus"}
 	fs.tokenHash[string(dispatch.HashToken("chat"))] = run
 	line := 12
 	c := fs.chat()
+	c.threads = []store.Thread{{ID: threadID, Kind: store.ThreadIncident, IncidentID: &incident, SessionID: chatSession,
+		AlertName: "KubePodCrashLooping", Namespace: "ebooks"}}
 	c.messages = []store.ChatMessage{
-		{PRID: 1, RunID: &run, Source: store.SourceUI, Author: "you", Body: "why this limit?", Status: store.ChatQueued},
-		{PRID: 1, RunID: &run, Source: store.SourceGitHub, Author: "jcwearn", Body: "make it 512Mi", GHKind: store.GHReviewComment,
-			Path: "apps/ebooks/deployment.yaml", Line: &line, Status: store.ChatQueued},
+		{ID: 1, ThreadID: threadID, RunID: &run, Source: store.SourceUI, Author: "you", Body: "why this limit?", Status: store.ChatQueued,
+			Page: "/incidents/3"},
+		{ID: 2, ThreadID: threadID, PRID: 1, RunID: &run, Source: store.SourceGitHub, Author: "jcwearn", Body: "make it 512Mi",
+			GHKind: store.GHReviewComment, Path: "apps/ebooks/deployment.yaml", Line: &line, Status: store.ChatQueued},
 	}
 	c.sessions[chatSession] = []byte("gzipped-session")
 	return s, fs, gh, &updates
@@ -201,8 +251,12 @@ func TestChatTurnContextAndSession(t *testing.T) {
 	if err := json.Unmarshal([]byte(body), &rc); err != nil {
 		t.Fatal(err)
 	}
-	if rc.Kind != runnerapi.KindChat || !rc.UpdatePR || rc.ProposePR || rc.Consolidate || rc.SessionID != chatSession {
+	if rc.Kind != runnerapi.KindChat || !rc.UpdatePR || rc.ProposePR || !rc.Consolidate || !rc.IncidentTools || !rc.Resume ||
+		rc.SessionID != chatSession || rc.Thread == nil || rc.Thread.Kind != runnerapi.ThreadIncident || rc.Thread.ID != 1 {
 		t.Errorf("chat context flags: %+v", rc)
+	}
+	if !strings.HasPrefix(rc.Messages[0].Page, "incident #3 (KubePodCrashLooping in ebooks, firing, PR #1200 open") {
+		t.Errorf("page context = %q", rc.Messages[0].Page)
 	}
 	if rc.PR == nil || rc.PR.Branch != "agent/3" || rc.PR.HeadSHA != "head1" || rc.PR.Number != 1200 {
 		t.Errorf("chat context PR: %+v", rc.PR)
@@ -249,8 +303,13 @@ func TestUpdatePR(t *testing.T) {
 		t.Fatal(err)
 	}
 	tools, err := cs.ListTools(t.Context(), nil)
-	if err != nil || len(tools.Tools) != 1 || !hasTool(tools.Tools, "update_pr") {
-		t.Fatalf("a chat turn should have only update_pr: %+v %v", tools, err)
+	if err != nil || len(tools.Tools) != 5 || hasTool(tools.Tools, "propose_pr") {
+		t.Fatalf("tools: %+v %v", tools, err)
+	}
+	for _, want := range []string{"update_pr", "list_incidents", "get_incident", "merge_incident", "link_incident"} {
+		if !hasTool(tools.Tools, want) {
+			t.Errorf("a chat turn on an open PR lacks %s", want)
+		}
 	}
 
 	out, isErr := callTool(t, cs, "update_pr", goodUpdate)
@@ -395,7 +454,8 @@ func TestUIChat(t *testing.T) {
 		t.Fatalf("post: %d %s", status, loc)
 	}
 	c := fs.chat()
-	if len(c.enqueued) != 1 || c.enqueued[0].Body != "why this limit?" || c.enqueued[0].Source != store.SourceUI || c.enqueued[0].PRID != 1 {
+	if len(c.enqueued) != 1 || c.enqueued[0].Body != "why this limit?" || c.enqueued[0].Source != store.SourceUI ||
+		c.enqueued[0].ThreadID != 1 || c.enqueued[0].Page != "/incidents/3" {
 		t.Errorf("enqueued = %+v", c.enqueued)
 	}
 	if waker.n == 0 {
@@ -409,8 +469,8 @@ func TestUIChat(t *testing.T) {
 	if _, loc := postForm(t, s.UIHandler(), "/incidents/3/chat", url.Values{"message": {"   "}}); !strings.Contains(loc, "error=") {
 		t.Errorf("empty message: %s", loc)
 	}
-	if _, loc := postForm(t, s.UIHandler(), "/incidents/99/chat", url.Values{"message": {"hi"}}); !strings.Contains(loc, "no+PR") {
-		t.Errorf("incident without a PR: %s", loc)
+	if _, loc := postForm(t, s.UIHandler(), "/incidents/99/chat", url.Values{"message": {"hi"}}); !strings.Contains(loc, "No+such+incident") {
+		t.Errorf("unknown incident: %s", loc)
 	}
 }
 
@@ -419,7 +479,7 @@ func TestIncidentPageShowsChat(t *testing.T) {
 	run := fs.runs[9]
 	fs.chat().activeChat = &run
 	reply := int64(8)
-	fs.chat().messages = append(fs.chat().messages, store.ChatMessage{PRID: 1, RunID: &reply, Source: store.SourceAgent,
+	fs.chat().messages = append(fs.chat().messages, store.ChatMessage{ThreadID: 1, PRID: 1, RunID: &reply, Source: store.SourceAgent,
 		Body: "Because the **peak** was 240Mi.", Status: store.ChatReply})
 	status, body := do(t, s.UIHandler(), http.MethodGet, "/incidents/3", "")
 	if status != http.StatusOK {
@@ -432,11 +492,13 @@ func TestIncidentPageShowsChat(t *testing.T) {
 		}
 	}
 
+	// Since threads, an incident's conversation outlives its PR: it can
+	// still be asked about (read-only), so the box stays.
 	fs.pr().prs[0].State = store.PRMerged
 	fs.chat().activeChat = nil
 	_, body = do(t, s.UIHandler(), http.MethodGet, "/incidents/3", "")
-	if strings.Contains(body, `action="/incidents/3/chat"`) || !strings.Contains(body, "the conversation is closed") {
-		t.Error("a merged PR still offers the chat box")
+	if !strings.Contains(body, `action="/incidents/3/chat"`) {
+		t.Error("an incident whose PR merged lost its conversation")
 	}
 }
 

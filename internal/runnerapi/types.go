@@ -46,6 +46,14 @@ type Context struct {
 	Kind string `json:"kind"`
 	// UpdatePR says the controller serves update_pr (chat turns).
 	UpdatePR bool `json:"update_pr"`
+	// IncidentTools says the controller serves list_incidents and
+	// get_incident (chat turns).
+	IncidentTools bool `json:"incident_tools"`
+	// Thread is a chat turn's conversation.
+	Thread *Thread `json:"thread,omitempty"`
+	// Resume says the thread's session has a stored file to continue; a chat
+	// turn without one starts the session.
+	Resume bool `json:"resume"`
 	// PR is the PR a chat turn is about.
 	PR *PR `json:"pr,omitempty"`
 	// Messages are the reviewer's messages a chat turn answers.
@@ -128,6 +136,19 @@ type Finish struct {
 	Usage      json.RawMessage `json:"usage,omitempty"`
 }
 
+// Thread kinds.
+const (
+	ThreadIncident = "incident"
+	ThreadGeneral  = "general"
+)
+
+// Thread is the conversation a chat turn belongs to.
+type Thread struct {
+	ID    int64  `json:"id"`
+	Kind  string `json:"kind"`
+	Title string `json:"title"`
+}
+
 // PR is the agent PR a chat turn works on. The runner checks out Branch,
 // which is at HeadSHA.
 type PR struct {
@@ -153,4 +174,7 @@ type ChatMessage struct {
 	Path     string `json:"path,omitempty"`
 	Line     *int   `json:"line,omitempty"`
 	DiffHunk string `json:"diff_hunk,omitempty"`
+	// Page describes the UI page the message was sent from, written by the
+	// controller from the page's path ("incident #25: …"); empty if none.
+	Page string `json:"page,omitempty"`
 }
