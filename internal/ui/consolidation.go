@@ -26,11 +26,6 @@ type IncidentPage struct {
 	// Notice and Problem report the outcome of the last form post.
 	Notice  string
 	Problem string
-	// Chat is the conversation on the PR; ChatRun the turn waiting or
-	// running, if any; ChatEnabled whether a message can be sent (an open PR).
-	Chat        []store.ChatMessage
-	ChatRun     *store.Run
-	ChatEnabled bool
 }
 
 // IncidentRow is one row of the home page: an incident and the incidents

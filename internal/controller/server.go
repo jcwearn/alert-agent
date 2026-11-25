@@ -63,11 +63,11 @@ type Store interface {
 	UpdatePullRequestHead(ctx context.Context, id int64, fromSHA, headSHA string, files []string) (bool, error)
 	SetPullRequestTitle(ctx context.Context, id int64, title string) error
 	EnqueueChat(ctx context.Context, m store.ChatMessage, lim store.ChatLimits) (store.ChatEnqueue, error)
-	ChatMessages(ctx context.Context, prID int64) ([]store.ChatMessage, error)
+	ChatMessages(ctx context.Context, threadID int64) ([]store.ChatMessage, error)
 	TurnMessages(ctx context.Context, runID int64) ([]store.ChatMessage, error)
 	FinishChatTurn(ctx context.Context, runID int64, answered bool, reply string) (store.ChatMessage, bool, error)
 	LatestSession(ctx context.Context, sessionID string, beforeRunID int64) ([]byte, error)
-	ActiveChatRun(ctx context.Context, prID int64) (store.Run, bool, error)
+	ActiveChatRun(ctx context.Context, threadID int64) (store.Run, bool, error)
 	RunEventsAfter(ctx context.Context, runID int64, seq int) ([]store.RunEvent, error)
 	AdvanceCommentsSince(ctx context.Context, prID int64, t time.Time) error
 	MarkChatReacted(ctx context.Context, id int64) error
@@ -154,8 +154,8 @@ func (s *Server) UIHandler() http.Handler {
 	mux.HandleFunc("POST /incidents/{id}/unmerge", s.uiUnmerge)
 	mux.HandleFunc("POST /incidents/{id}/link", s.uiLink)
 	mux.HandleFunc("POST /incidents/{id}/unlink", s.uiUnlink)
-	mux.HandleFunc("POST /incidents/{id}/chat", s.uiChat)
 	mux.HandleFunc("GET /runs/{id}/stream", s.runStream)
+	mux.Handle("GET /static/", ui.StaticHandler())
 	mux.HandleFunc("GET /api/chat/threads", s.apiThreads)
 	mux.HandleFunc("POST /api/chat/threads", s.apiCreateThread)
 	mux.HandleFunc("GET /api/chat/threads/{id}", s.apiThread)
@@ -296,20 +296,6 @@ func (s *Server) incidentDetail(w http.ResponseWriter, r *http.Request) {
 		page.PR = &p
 	} else if !errors.Is(err, store.ErrNotFound) {
 		slog.Error("loading PR", "incident", id, "err", err)
-	}
-	// The incident's conversation (its parent's, if merged), if it has one.
-	page.ChatEnabled = true
-	if th, err := s.threadForIncident(ctx, id, false); err == nil {
-		if page.Chat, err = s.store.ChatMessages(ctx, th.ID); err != nil {
-			slog.Error("loading chat", "incident", id, "err", err)
-		}
-		if run, ok, err := s.store.ActiveChatRun(ctx, th.ID); err != nil {
-			slog.Error("loading chat turn", "incident", id, "err", err)
-		} else if ok {
-			page.ChatRun = &run
-		}
-	} else if !errors.Is(err, store.ErrNotFound) {
-		slog.Error("loading thread", "incident", id, "err", err)
 	}
 	if in.ParentID != nil {
 		if parent, _, err := s.store.GetIncident(ctx, *in.ParentID); err == nil {

@@ -7,7 +7,6 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
-	"net/url"
 	"strings"
 	"testing"
 	"time"
@@ -431,74 +430,51 @@ func newTestServer(t *testing.T, h http.Handler) string {
 	return srv.URL
 }
 
-// postForm posts a form and returns the status and redirect location.
-func postForm(t *testing.T, h http.Handler, path string, form url.Values) (status int, location string) {
-	t.Helper()
-	srv := newTestServer(t, h)
-	client := &http.Client{CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
-	resp, err := client.PostForm(srv+path, form)
-	if err != nil {
-		t.Fatal(err)
-	}
-	_ = resp.Body.Close()
-	return resp.StatusCode, resp.Header.Get("Location")
-}
-
-func TestUIChat(t *testing.T) {
-	s, fs, _, _ := chatServer(t, nil)
-	waker := &countingWaker{}
-	s.waker = waker
-
-	status, loc := postForm(t, s.UIHandler(), "/incidents/3/chat", url.Values{"message": {"  why this limit?  "}})
-	if status != http.StatusSeeOther || !strings.Contains(loc, "msg=") || !strings.HasSuffix(loc, "#chat") {
-		t.Fatalf("post: %d %s", status, loc)
-	}
-	c := fs.chat()
-	if len(c.enqueued) != 1 || c.enqueued[0].Body != "why this limit?" || c.enqueued[0].Source != store.SourceUI ||
-		c.enqueued[0].ThreadID != 1 || c.enqueued[0].Page != "/incidents/3" {
-		t.Errorf("enqueued = %+v", c.enqueued)
-	}
-	if waker.n == 0 {
-		t.Error("dispatcher not woken")
-	}
-
-	c.result = store.ChatEnqueue{Capped: "this PR already had 4 agent turns in the last hour (the limit)", RetryAt: time.Now().Add(20 * time.Minute)}
-	if _, loc := postForm(t, s.UIHandler(), "/incidents/3/chat", url.Values{"message": {"again"}}); !strings.Contains(loc, "error=Not+processed") || !strings.Contains(loc, "Try+again+after") {
-		t.Errorf("capped: %s", loc)
-	}
-	if _, loc := postForm(t, s.UIHandler(), "/incidents/3/chat", url.Values{"message": {"   "}}); !strings.Contains(loc, "error=") {
-		t.Errorf("empty message: %s", loc)
-	}
-	if _, loc := postForm(t, s.UIHandler(), "/incidents/99/chat", url.Values{"message": {"hi"}}); !strings.Contains(loc, "No+such+incident") {
-		t.Errorf("unknown incident: %s", loc)
-	}
-}
-
-func TestIncidentPageShowsChat(t *testing.T) {
-	s, fs, _, _ := chatServer(t, nil)
-	run := fs.runs[9]
-	fs.chat().activeChat = &run
-	reply := int64(8)
-	fs.chat().messages = append(fs.chat().messages, store.ChatMessage{ThreadID: 1, PRID: 1, RunID: &reply, Source: store.SourceAgent,
-		Body: "Because the **peak** was 240Mi.", Status: store.ChatReply})
+// The incident page no longer embeds the conversation: it offers the chat
+// window (chat.js) on the incident's thread, and every page loads it.
+func TestIncidentPageChatButton(t *testing.T) {
+	s, _, _, _ := chatServer(t, nil)
 	status, body := do(t, s.UIHandler(), http.MethodGet, "/incidents/3", "")
 	if status != http.StatusOK {
 		t.Fatalf("status %d", status)
 	}
-	for _, want := range []string{`id="chat"`, "You, in the UI", "@jcwearn on GitHub", "apps/ebooks/deployment.yaml", "<strong>peak</strong>",
-		`data-run="9"`, "EventSource", `action="/incidents/3/chat"`, "waiting for the agent"} {
+	for _, want := range []string{`data-chat-incident="3"`, `/static/chat.js?v=`, `/static/chat.css?v=`} {
 		if !strings.Contains(body, want) {
 			t.Errorf("page lacks %q", want)
 		}
 	}
+	if strings.Contains(body, `action="/incidents/3/chat"`) {
+		t.Error("the old chat form is still there")
+	}
+	if status, _ := do(t, s.UIHandler(), http.MethodPost, "/incidents/3/chat", "message=hi"); status != http.StatusMethodNotAllowed && status != http.StatusNotFound {
+		t.Errorf("old chat route: %d", status)
+	}
+}
 
-	// Since threads, an incident's conversation outlives its PR: it can
-	// still be asked about (read-only), so the box stays.
-	fs.pr().prs[0].State = store.PRMerged
-	fs.chat().activeChat = nil
-	_, body = do(t, s.UIHandler(), http.MethodGet, "/incidents/3", "")
-	if !strings.Contains(body, `action="/incidents/3/chat"`) {
-		t.Error("an incident whose PR merged lost its conversation")
+func TestStaticAssets(t *testing.T) {
+	s, _, _, _ := chatServer(t, nil)
+	h := s.UIHandler()
+	_, page := do(t, h, http.MethodGet, "/incidents/3", "")
+	i := strings.Index(page, "/static/chat.js?v=")
+	if i < 0 {
+		t.Fatal("no chat.js link")
+	}
+	link := page[i : i+strings.IndexByte(page[i:], '"')]
+	srv := newTestServer(t, h)
+	for _, c := range []struct{ path, cache, typ string }{
+		{link, "immutable", "javascript"},
+		{"/static/chat.css", "no-cache", "text/css"},
+	} {
+		req, _ := http.NewRequestWithContext(context.Background(), http.MethodGet, srv+c.path, http.NoBody)
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		_ = resp.Body.Close()
+		if resp.StatusCode != http.StatusOK || !strings.Contains(resp.Header.Get("Cache-Control"), c.cache) ||
+			!strings.Contains(resp.Header.Get("Content-Type"), c.typ) {
+			t.Errorf("%s: %d %q %q", c.path, resp.StatusCode, resp.Header.Get("Cache-Control"), resp.Header.Get("Content-Type"))
+		}
 	}
 }
 
@@ -578,7 +554,7 @@ func TestUpdatePRRetitles(t *testing.T) {
 		t.Fatal(status)
 	}
 	msgs := fs.chat().messages
-	if reply := msgs[len(msgs)-1].Body; !strings.Contains(reply, "Pushed `head2`: fix(ebooks): use 512Mi instead\nRetitled the PR: fix(ebooks): raise memory limit to 512Mi") {
+	if reply := msgs[len(msgs)-1].Body; !strings.Contains(reply, "Pushed `head2`: fix(ebooks): use 512Mi instead\n\nRetitled the PR: fix(ebooks): raise memory limit to 512Mi") {
 		t.Errorf("reply footer = %q", reply)
 	}
 }
