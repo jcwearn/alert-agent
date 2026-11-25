@@ -142,6 +142,8 @@ type PullRequest struct {
 	ClosedAt   *time.Time
 	// Files the PR changes, as the controller committed them.
 	Files []string
+	// CommentsSince is where the comment poller reads from next.
+	CommentsSince time.Time
 
 	// From the incident, for lists.
 	AlertName string
@@ -150,7 +152,7 @@ type PullRequest struct {
 
 const prColumns = `p.id, p.incident_id, p.run_id, p.number, p.url, p.title, p.branch, p.base_sha,
 	p.head_sha, p.state, p.checks, p.notified_at, p.created_at, p.updated_at, p.closed_at, p.files,
-	i.alertname, i.namespace`
+	p.comments_since, i.alertname, i.namespace`
 
 const prFrom = ` FROM pull_requests p JOIN incidents i ON i.id = p.incident_id`
 
@@ -158,7 +160,7 @@ func scanPR(row pgx.Row) (PullRequest, error) {
 	var p PullRequest
 	err := row.Scan(&p.ID, &p.IncidentID, &p.RunID, &p.Number, &p.URL, &p.Title, &p.Branch, &p.BaseSHA,
 		&p.HeadSHA, &p.State, &p.Checks, &p.NotifiedAt, &p.CreatedAt, &p.UpdatedAt, &p.ClosedAt, &p.Files,
-		&p.AlertName, &p.Namespace)
+		&p.CommentsSince, &p.AlertName, &p.Namespace)
 	return p, err
 }
 

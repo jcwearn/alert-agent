@@ -216,10 +216,14 @@ func (s *Server) chatTurnFinished(ctx context.Context, run store.Run) {
 	if footer := s.pushedFooter(ctx, run); footer != "" {
 		reply += "\n\n" + footer
 	}
-	if _, first, err := s.store.FinishChatTurn(ctx, run.ID, answered, reply); err != nil {
+	msg, first, err := s.store.FinishChatTurn(ctx, run.ID, answered, reply)
+	if err != nil {
 		slog.Error("recording chat reply", "run", run.ID, "err", err)
-	} else if first {
+		return
+	}
+	if first {
 		slog.Info("chat turn finished", "run", run.ID, "pr_id", *run.PRID, "answered", answered)
+		s.replyOnGitHub(ctx, run, msg)
 	}
 }
 

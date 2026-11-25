@@ -294,3 +294,21 @@ func (s *Store) RunEventsAfter(ctx context.Context, runID int64, seq int) ([]Run
 	}
 	return out, rows.Err()
 }
+
+// AdvanceCommentsSince moves a PR's comment cursor forward (never back).
+func (s *Store) AdvanceCommentsSince(ctx context.Context, prID int64, t time.Time) error {
+	_, err := s.pool.Exec(ctx, `UPDATE pull_requests SET comments_since = GREATEST(comments_since, $2) WHERE id = $1`, prID, t)
+	return err
+}
+
+// MarkChatReacted records the acknowledgement reaction on a comment.
+func (s *Store) MarkChatReacted(ctx context.Context, id int64) error {
+	_, err := s.pool.Exec(ctx, `UPDATE chat_messages SET reacted_at = now() WHERE id = $1`, id)
+	return err
+}
+
+// SetChatMessageURL records where a reply was posted on GitHub.
+func (s *Store) SetChatMessageURL(ctx context.Context, id int64, url string) error {
+	_, err := s.pool.Exec(ctx, `UPDATE chat_messages SET html_url = $2 WHERE id = $1`, id, url)
+	return err
+}

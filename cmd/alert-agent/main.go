@@ -112,6 +112,10 @@ func runController(ctx context.Context) error {
 	if os.Getenv("PR_ENABLED") == "true" {
 		srv.EnablePRs(newPRs(app), newReviewer(notifier))
 		slog.Info("PR path enabled: runners may propose_pr")
+		if c := newComments(app); c != nil {
+			srv.EnableComments(c)
+			slog.Info("PR comments enabled", "logins", c.AllowedLogins, "interval", c.Interval)
+		}
 	}
 	go d.Run(ctx)
 	return srv.Run(ctx, addrs[0], addrs[1], addrs[2])
@@ -160,6 +164,21 @@ func newPRs(app *github.App) *controller.PRs {
 			AuthorEmail: envOr("COMMIT_AUTHOR_EMAIL", "alert-agent[bot]@users.noreply.github.com"),
 		},
 	}
+}
+
+// newComments turns on PR comments as a way into the chat when
+// CHAT_ALLOWED_LOGINS names at least one GitHub login (comma-separated).
+func newComments(app *github.App) *controller.Comments {
+	var logins []string
+	for _, v := range strings.Split(os.Getenv("CHAT_ALLOWED_LOGINS"), ",") {
+		if v = strings.TrimSpace(v); v != "" {
+			logins = append(logins, v)
+		}
+	}
+	if len(logins) == 0 {
+		return nil
+	}
+	return &controller.Comments{GitHub: app, AllowedLogins: logins, Interval: envDuration("COMMENT_POLL_INTERVAL", 30*time.Second)}
 }
 
 // newReviewer sends "needs your review" to ntfy and to Slack, whichever of

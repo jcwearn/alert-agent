@@ -62,7 +62,7 @@ func chatPanel(p IncidentPage) templ.Component {
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
 		}
-		if len(p.Chat) == 0 {
+		if len(p.Chat) == 0 && p.ChatEnabled {
 			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 2, "<p class=\"muted hint\">Ask the agent about this PR, or ask it to change something: it continues the session that opened the PR, and a change becomes a new commit on the same branch.</p>")
 			if templ_7745c5c3_Err != nil {
 				return templ_7745c5c3_Err

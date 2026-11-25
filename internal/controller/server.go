@@ -68,6 +68,9 @@ type Store interface {
 	LatestSession(ctx context.Context, sessionID string, beforeRunID int64) ([]byte, error)
 	ActiveChatRun(ctx context.Context, prID int64) (store.Run, bool, error)
 	RunEventsAfter(ctx context.Context, runID int64, seq int) ([]store.RunEvent, error)
+	AdvanceCommentsSince(ctx context.Context, prID int64, t time.Time) error
+	MarkChatReacted(ctx context.Context, id int64) error
+	SetChatMessageURL(ctx context.Context, id int64, url string) error
 }
 
 // Options configure the agent side of the controller.
@@ -109,6 +112,7 @@ type Server struct {
 	notifier Notifier
 	prs      *PRs
 	reviewer Reviewer
+	comments *Comments
 }
 
 // New returns a Server backed by st. waker and notifier may be nil.
@@ -366,6 +370,9 @@ func (s *Server) Run(ctx context.Context, uiAddr, webhookAddr, runnerAddr string
 
 	if s.prs != nil {
 		go s.pollPRs(ctx)
+		if s.comments != nil {
+			go s.pollComments(ctx)
+		}
 	}
 
 	errCh := make(chan error, len(servers))

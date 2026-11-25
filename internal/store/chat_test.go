@@ -3,6 +3,7 @@ package store
 import (
 	"errors"
 	"testing"
+	"time"
 )
 
 // openPR finishes a run that opened a PR, with a stored session, and
@@ -181,5 +182,39 @@ func TestChatCapsAndClosedPR(t *testing.T) {
 		if m.Status == ChatQueued {
 			t.Errorf("message %q still queued after its PR closed", m.Body)
 		}
+	}
+}
+
+func TestCommentCursorAndReplyURL(t *testing.T) {
+	s := openTestStore(t)
+	ctx := t.Context()
+	pr, _ := openPR(t, s)
+	if pr.CommentsSince.IsZero() {
+		t.Fatal("comments_since not initialised")
+	}
+	later := pr.CommentsSince.Add(time.Hour)
+	if err := s.AdvanceCommentsSince(ctx, pr.ID, later); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.AdvanceCommentsSince(ctx, pr.ID, pr.CommentsSince); err != nil {
+		t.Fatal(err)
+	}
+	if p, _ := s.GetPullRequest(ctx, pr.ID); !p.CommentsSince.Equal(later) {
+		t.Errorf("cursor = %v, want %v (it must never move back)", p.CommentsSince, later)
+	}
+
+	res, err := s.EnqueueChat(ctx, ChatMessage{PRID: pr.ID, Source: SourceGitHub, Author: "me", Body: "hi", GHKind: GHIssueComment, GHID: 5}, ChatLimits{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.MarkChatReacted(ctx, res.MessageID); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.SetChatMessageURL(ctx, res.MessageID, "https://example/c/1"); err != nil {
+		t.Fatal(err)
+	}
+	all, _ := s.ChatMessages(ctx, pr.ID)
+	if len(all) != 1 || all[0].ReactedAt == nil || all[0].HTMLURL != "https://example/c/1" || all[0].GHID != 5 || all[0].GHKind != GHIssueComment {
+		t.Errorf("message = %+v", all)
 	}
 }
