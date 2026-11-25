@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"net/http"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -240,5 +241,37 @@ func TestChatTurnRepliesOnGitHub(t *testing.T) {
 				t.Errorf("reply token permissions = %v", last)
 			}
 		})
+	}
+}
+
+// A comment the store fails to record keeps the cursor at it, so the next
+// pass reads it again; comments after it are not lost either.
+func TestPollCommentsHoldsCursorAtAFailure(t *testing.T) {
+	s, fs, _, gc, since := commentServer(t)
+	fs.chat().result = store.ChatEnqueue{RunID: 10, NewRun: true}
+	fs.chat().failID = 7171034603
+	gc.issue = []github.IssueComment{
+		{ID: 7171034603, Body: "why not 256Mi?", User: me, CreatedAt: since.Add(time.Minute)},
+		{ID: 7171034604, Body: "and later", User: me, CreatedAt: since.Add(3 * time.Minute)},
+	}
+	if err := s.PollCommentsOnce(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	if pr, _ := fs.GetPullRequest(t.Context(), 1); !pr.CommentsSince.Equal(since.Add(time.Minute)) {
+		t.Errorf("cursor = %v, want it held at the failed comment (%v)", pr.CommentsSince, since.Add(time.Minute))
+	}
+	fs.chat().failID = 0
+	if err := s.PollCommentsOnce(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	var ids []int64
+	for _, m := range fs.chat().messages {
+		ids = append(ids, m.GHID)
+	}
+	if !slices.Contains(ids, int64(7171034603)) {
+		t.Errorf("the failed comment was never recorded: %v", ids)
+	}
+	if pr, _ := fs.GetPullRequest(t.Context(), 1); !pr.CommentsSince.Equal(since.Add(3 * time.Minute)) {
+		t.Errorf("cursor after recovery = %v", pr.CommentsSince)
 	}
 }

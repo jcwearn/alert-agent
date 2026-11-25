@@ -134,7 +134,7 @@ func (s *Store) EnqueueChat(ctx context.Context, m ChatMessage, lim ChatLimits) 
 			err := tx.QueryRow(ctx, `
 				INSERT INTO chat_messages (pr_id, run_id, source, author, body, status, gh_kind, gh_id,
 					gh_thread_id, path, line, diff_hunk, html_url)
-				VALUES ($1, $2, $3, $4, $5, $6, NULLIF($7, ''), NULLIF($8, 0), NULLIF($9, 0), $10, $11, $12, $13)
+				VALUES ($1, $2, $3, $4, $5, $6, NULLIF($7::text, ''), NULLIF($8::bigint, 0), NULLIF($9::bigint, 0), $10, $11, $12, $13)
 				ON CONFLICT (gh_kind, gh_id) DO NOTHING
 				RETURNING id`,
 				m.PRID, runID, m.Source, m.Author, m.Body, status, m.GHKind, m.GHID, m.GHThreadID,
