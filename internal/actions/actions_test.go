@@ -261,6 +261,13 @@ func TestAPIErrors(t *testing.T) {
 	if r := refusal(t, apiError(vap, "restart", obj)); r.Forbidden || !strings.Contains(r.Reason, "admission policy") {
 		t.Errorf("policy: %+v", r)
 	}
+	// The API server reports a policy denial of an update or delete as 422
+	// Invalid (and of a create as 403), as the live cluster showed.
+	invalid := apierrors.NewInvalid(schema.GroupKind{Group: "apps", Kind: "Deployment"}, "coredns", nil)
+	invalid.ErrStatus.Message = `deployments "coredns" is invalid: : ValidatingAdmissionPolicy 'alert-agent-actor' with binding 'alert-agent-actor' denied request: the actor may not change a workload's pod spec or pod labels`
+	if r := refusal(t, apiError(invalid, "restart", obj)); r.Forbidden || !strings.Contains(r.Reason, "may not change a workload's pod spec") {
+		t.Errorf("policy as Invalid: %+v", r)
+	}
 	if r := refusal(t, apiError(apierrors.NewNotFound(gr, "coredns"), "restart", obj)); !strings.Contains(r.Reason, "does not exist") {
 		t.Errorf("not found: %+v", r)
 	}
