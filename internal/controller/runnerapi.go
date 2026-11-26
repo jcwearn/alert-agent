@@ -255,9 +255,13 @@ func (s *Server) runnerFinish(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "status must be succeeded or failed", http.StatusBadRequest)
 		return
 	}
+	reason := ""
+	if fin.Status == store.RunFailed && (fin.Reason == store.FailureAuth || fin.Reason == store.FailureUsageLimit) {
+		reason = fin.Reason
+	}
 	finished, err := s.store.FinishRun(r.Context(), run.ID, store.RunResult{
 		Status: fin.Status, Report: fin.Report, Error: fin.Error,
-		NumTurns: fin.NumTurns, DurationMS: fin.DurationMS, Usage: fin.Usage,
+		NumTurns: fin.NumTurns, DurationMS: fin.DurationMS, Usage: fin.Usage, Reason: reason,
 	})
 	if err != nil {
 		slog.Error("finishing run", "run", run.ID, "err", err)
@@ -282,6 +286,15 @@ func (s *Server) RunFinished(runID int64) {
 		return
 	}
 	s.metrics.runs.WithLabelValues(run.Status).Inc()
+	switch {
+	case run.Status == store.RunSucceeded:
+		s.claudeUnblocked(ctx)
+	case run.Status == store.RunFailed && run.FailureReason != "":
+		s.metrics.failures.WithLabelValues(run.FailureReason).Inc()
+		s.claudeBlocked(ctx, run)
+	case run.Status == store.RunFailed:
+		s.metrics.failures.WithLabelValues("other").Inc()
+	}
 	// A chat turn's outcome is its reply in the conversation, not a diagnosis.
 	if run.Kind == store.KindChat {
 		s.chatTurnFinished(ctx, run)
@@ -294,6 +307,10 @@ func (s *Server) RunFinished(runID int64) {
 		in, _, err := s.store.GetIncident(ctx, run.IncidentID)
 		switch {
 		case err != nil:
+		case run.FailureReason != "":
+			// Deferred: the block notice covers it, and the successor run
+			// will post the diagnosis.
+			slog.Info("not notifying: run deferred", "run", run.ID, "reason", run.FailureReason)
 		case in.Merged() && in.MergedBy == agentActor(run.ID).mergedBy():
 			// The run folded its own incident into another, whose diagnosis
 			// covers it; the merge is in the UI's audit trail.

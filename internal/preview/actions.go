@@ -264,3 +264,13 @@ func (previewActor) Do(_ context.Context, req actions.Request, _ actions.Options
 	obj := actions.Object{Kind: req.Kind, Namespace: req.Namespace, Name: req.Name}
 	return actions.Result{Target: obj, Object: obj, Call: "(preview) " + req.Tool + " " + obj.String() + ": nothing was done"}, nil
 }
+
+// ---- controller.Store: Phase 6 (read by /metrics) ----
+
+func (f *fixtures) QueueDepth(context.Context) (map[string]int, time.Duration, error) {
+	return map[string]int{store.KindDiagnose: 0, store.KindChat: 0}, 0, nil
+}
+
+func (f *fixtures) GetClaudeBlock(context.Context) (store.ClaudeBlock, bool, error) {
+	return store.ClaudeBlock{}, false, nil
+}

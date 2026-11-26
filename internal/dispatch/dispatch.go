@@ -47,6 +47,7 @@ type Store interface {
 	RunningRun(ctx context.Context) (store.Run, bool, error)
 	RunsStartedSince(ctx context.Context, t time.Time) (int, error)
 	FinishRun(ctx context.Context, runID int64, res store.RunResult) (bool, error)
+	GetClaudeBlock(ctx context.Context) (store.ClaudeBlock, bool, error)
 }
 
 // TokenMinter issues narrowed GitHub installation tokens.
@@ -64,6 +65,7 @@ type Dispatcher struct {
 	now      func() time.Time
 	onFinish func(runID int64)
 	capped   bool
+	blocked  bool
 }
 
 // New returns a Dispatcher. onFinish is called after the dispatcher itself
@@ -117,6 +119,22 @@ func (d *Dispatcher) Tick(ctx context.Context) error {
 	if ok {
 		return d.checkRunning(ctx, running)
 	}
+
+	// Claude refuses every run (token or usage limit): start nothing,
+	// chat turns included, until the retry time. The first run after it is
+	// the probe; a success clears the block.
+	block, isBlocked, err := d.store.GetClaudeBlock(ctx)
+	if err != nil {
+		return err
+	}
+	if isBlocked && d.now().Before(block.Until) {
+		if !d.blocked {
+			slog.Warn("claude blocked; queued runs wait", "reason", block.Reason, "until", block.Until)
+			d.blocked = true
+		}
+		return nil
+	}
+	d.blocked = false
 
 	// MaxRunsPerHour caps alert runs. Chat turns are budgeted when their
 	// message arrives, so they still start when alert runs must wait.

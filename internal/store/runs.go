@@ -48,6 +48,8 @@ type Run struct {
 	// ThreadID is a chat turn's thread. A general thread's turns have no
 	// incident: IncidentID is 0.
 	ThreadID *int64
+	// FailureReason is a failed run's FailureAuth or FailureUsageLimit.
+	FailureReason string
 }
 
 // RunEvent is one line of a run's transcript.
@@ -66,15 +68,24 @@ type RunResult struct {
 	NumTurns   *int
 	DurationMS *int64
 	Usage      json.RawMessage
+	// Reason is a failure's FailureAuth or FailureUsageLimit, else empty.
+	Reason string
 }
 
+// Failure reasons that defer a run instead of ending its incident's chance
+// of a diagnosis.
+const (
+	FailureAuth       = "auth"
+	FailureUsageLimit = "usage_limit"
+)
+
 const runColumns = `id, COALESCE(incident_id, 0), status, session_id::text, job_name, model, created_at,
-	started_at, finished_at, report, error, num_turns, duration_ms, kind, pr_id, thread_id`
+	started_at, finished_at, report, error, num_turns, duration_ms, kind, pr_id, thread_id, failure_reason`
 
 func scanRun(row pgx.Row) (Run, error) {
 	var r Run
 	err := row.Scan(&r.ID, &r.IncidentID, &r.Status, &r.SessionID, &r.JobName, &r.Model, &r.CreatedAt,
-		&r.StartedAt, &r.FinishedAt, &r.Report, &r.Error, &r.NumTurns, &r.DurationMS, &r.Kind, &r.PRID, &r.ThreadID)
+		&r.StartedAt, &r.FinishedAt, &r.Report, &r.Error, &r.NumTurns, &r.DurationMS, &r.Kind, &r.PRID, &r.ThreadID, &r.FailureReason)
 	return r, err
 }
 
@@ -302,13 +313,78 @@ func (s *Store) FinishRun(ctx context.Context, runID int64, res RunResult) (bool
 	}
 	tag, err := s.pool.Exec(ctx, `
 		UPDATE runs SET status = $2, finished_at = now(), token_hash = NULL,
-			report = $3, error = $4, num_turns = $5, duration_ms = $6, usage = $7
+			report = $3, error = $4, num_turns = $5, duration_ms = $6, usage = $7, failure_reason = $8
 		WHERE id = $1 AND status = 'running'`,
-		runID, res.Status, res.Report, res.Error, res.NumTurns, res.DurationMS, usage)
+		runID, res.Status, res.Report, res.Error, res.NumTurns, res.DurationMS, usage, res.Reason)
 	if err != nil {
 		return false, err
 	}
 	return tag.RowsAffected() == 1, nil
+}
+
+// DeferRun queues a fresh run for a failed alert run's incidents that still
+// need the agent, held until until. The failed run keeps its transcript; the
+// new one gets a new session and Job. It returns false for a chat turn
+// (a person is waiting and is told instead) and when no incident is left to
+// diagnose.
+func (s *Store) DeferRun(ctx context.Context, runID int64, until time.Time) (newID int64, deferred bool, err error) {
+	err = pgx.BeginFunc(ctx, s.pool, func(tx pgx.Tx) error {
+		deferred = false
+		if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtext('alert-agent enqueue'))`); err != nil {
+			return err
+		}
+		err := tx.QueryRow(ctx, `
+			INSERT INTO runs (incident_id, status, hold_until)
+			SELECT COALESCE((
+				SELECT i.id FROM incidents i
+				WHERE i.id = r.incident_id AND i.alert_status = 'firing' AND i.parent_id IS NULL
+			), (
+				SELECT min(i.id) FROM run_incidents ri JOIN incidents i ON i.id = ri.incident_id
+				WHERE ri.run_id = r.id AND i.alert_status = 'firing' AND i.parent_id IS NULL
+			)), 'queued', $2
+			FROM runs r
+			WHERE r.id = $1 AND r.kind = 'diagnose' AND r.status = 'failed' AND `+liveMember+`
+			RETURNING id`, runID, until).Scan(&newID)
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil
+		}
+		if err != nil {
+			return fmt.Errorf("queue deferred run: %w", err)
+		}
+		deferred = true
+		_, err = tx.Exec(ctx, `
+			INSERT INTO run_incidents (run_id, incident_id)
+			SELECT $2, i.id FROM run_incidents ri JOIN incidents i ON i.id = ri.incident_id
+			WHERE ri.run_id = $1 AND i.alert_status = 'firing' AND i.parent_id IS NULL
+			ON CONFLICT DO NOTHING`, runID, newID)
+		return err
+	})
+	return newID, deferred, err
+}
+
+// QueueDepth counts queued runs by kind, held ones included, and the age of
+// the oldest (zero when nothing is queued).
+func (s *Store) QueueDepth(ctx context.Context) (map[string]int, time.Duration, error) {
+	rows, err := s.pool.Query(ctx, `
+		SELECT kind, count(*), EXTRACT(EPOCH FROM now() - min(created_at))::float8
+		FROM runs WHERE status = 'queued' GROUP BY kind`)
+	if err != nil {
+		return nil, 0, err
+	}
+	defer rows.Close()
+	depth := map[string]int{KindDiagnose: 0, KindChat: 0}
+	var oldest float64
+	for rows.Next() {
+		var kind string
+		var n int
+		var age float64
+		if err := rows.Scan(&kind, &n, &age); err != nil {
+			return nil, 0, err
+		}
+		depth[kind] = n
+		oldest = max(oldest, age)
+	}
+	return depth, time.Duration(oldest * float64(time.Second)), rows.Err()
 }
 
 // GetRun returns one run.

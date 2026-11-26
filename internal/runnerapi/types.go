@@ -177,7 +177,16 @@ type Finish struct {
 	NumTurns   *int            `json:"num_turns,omitempty"`
 	DurationMS *int64          `json:"duration_ms,omitempty"`
 	Usage      json.RawMessage `json:"usage,omitempty"`
+	// Reason classifies a failure that will repeat until fixed: ReasonAuth or
+	// ReasonUsageLimit. Empty for any other failure.
+	Reason string `json:"reason,omitempty"`
 }
+
+// Failure reasons a runner reports.
+const (
+	ReasonAuth       = "auth"
+	ReasonUsageLimit = "usage_limit"
+)
 
 // Thread kinds.
 const (

@@ -151,6 +151,10 @@ func Run(ctx context.Context, cfg Config) error {
 		if result.IsError || result.Subtype != "success" {
 			fin.Status = "failed"
 			fin.Error = "claude ended with " + result.Subtype
+			if result.IsError && result.Result != "" {
+				fin.Error = "claude: " + result.Result
+			}
+			fin.Reason = failureReason(result)
 		}
 	}
 	switch {
@@ -304,6 +308,37 @@ type resultEvent struct {
 	NumTurns   *int            `json:"num_turns"`
 	DurationMS *int64          `json:"duration_ms"`
 	Usage      json.RawMessage `json:"usage"`
+	// APIErrorStatus is the HTTP status of the API error that ended the
+	// session, when one did.
+	APIErrorStatus int `json:"api_error_status"`
+	// apiError is the last assistant message's error kind (stream-json puts
+	// it on the event, e.g. "authentication_failed"); stream fills it in.
+	apiError string
+}
+
+// failureReason sorts a failed result into the failures that will fail every
+// run the same way until a person or the clock fixes them -- the token
+// (auth) and the subscription's limit (usage_limit) -- and everything else
+// (""). Captured from claude 2.1.332 with an invalid token: the assistant
+// event carries error "authentication_failed", the result
+// api_error_status 401.
+func failureReason(r *resultEvent) string {
+	switch r.apiError {
+	case "authentication_failed", "billing_error":
+		return runnerapi.ReasonAuth
+	case "rate_limit":
+		return runnerapi.ReasonUsageLimit
+	}
+	switch r.APIErrorStatus {
+	case 401, 403:
+		return runnerapi.ReasonAuth
+	case 429:
+		return runnerapi.ReasonUsageLimit
+	}
+	if lower := strings.ToLower(r.Result); strings.Contains(lower, "usage limit") || strings.Contains(lower, "hit your limit") {
+		return runnerapi.ReasonUsageLimit
+	}
+	return ""
 }
 
 const (
@@ -321,6 +356,7 @@ func stream(ctx context.Context, r io.Reader, api *client) (*resultEvent, error)
 
 	var (
 		result    *resultEvent
+		apiError  string
 		batch     []runnerapi.Event
 		seq       int
 		lastFlush = time.Now()
@@ -353,9 +389,18 @@ func stream(ctx context.Context, r io.Reader, api *client) (*resultEvent, error)
 		batch = append(batch, runnerapi.Event{Seq: seq, Type: head.Type, Payload: append(json.RawMessage(nil), line...)})
 		seq++
 
-		if head.Type == "result" {
+		switch head.Type {
+		case "assistant":
+			var a struct {
+				Error string `json:"error"`
+			}
+			if err := json.Unmarshal(line, &a); err == nil && a.Error != "" {
+				apiError = a.Error
+			}
+		case "result":
 			var res resultEvent
 			if err := json.Unmarshal(line, &res); err == nil {
+				res.apiError = apiError
 				result = &res
 			}
 		}

@@ -22,6 +22,14 @@ type fakeStore struct {
 	started   int
 	claimHash []byte
 	finished  map[int64]store.RunResult
+	block     *store.ClaudeBlock
+}
+
+func (f *fakeStore) GetClaudeBlock(context.Context) (store.ClaudeBlock, bool, error) {
+	if f.block == nil {
+		return store.ClaudeBlock{}, false, nil
+	}
+	return *f.block, true, nil
 }
 
 func (f *fakeStore) ClaimNextRun(_ context.Context, hash []byte, prefix, model string) (store.Run, bool, error) {
@@ -229,5 +237,30 @@ func jobWith(conds ...batchv1.JobCondition) *batchv1.Job {
 	return &batchv1.Job{
 		ObjectMeta: metav1.ObjectMeta{Name: "alert-agent-run-7", Namespace: "alert-agent"},
 		Status:     batchv1.JobStatus{Conditions: conds},
+	}
+}
+
+func TestTickWaitsOutAClaudeBlock(t *testing.T) {
+	st := &fakeStore{queued: []store.Run{{ID: 7, IncidentID: 3, Kind: store.KindChat}}}
+	kube := fake.NewClientset()
+	d := New(testConfig(), st, kube, &fakeMinter{}, nil)
+	now := time.Date(2026, 11, 26, 12, 0, 0, 0, time.UTC)
+	d.now = func() time.Time { return now }
+	st.block = &store.ClaudeBlock{Reason: store.FailureUsageLimit, Until: now.Add(time.Hour)}
+
+	if err := d.Tick(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	if len(st.queued) != 1 {
+		t.Fatal("a run was claimed while Claude is blocked, chat turns included")
+	}
+
+	// Past the retry time the next run goes: it is the probe.
+	now = now.Add(time.Hour + time.Second)
+	if err := d.Tick(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	if len(st.queued) != 0 {
+		t.Fatal("no run claimed after the retry time")
 	}
 }
