@@ -382,11 +382,18 @@
 	}
 
 	// renderSwitch offers this page's incident thread when the panel is on
-	// another one.
+	// another one; on a page with no incident (home, a run), it offers a
+	// general conversation when the panel is on an incident's.
 	function renderSwitch() {
 		switchBar.innerHTML = "";
 		var h = list && list.here;
 		var on = view && view.thread ? view.thread.incident_id : st.pending && st.pending.incident_id;
+		if (list && !h && on) {
+			switchBar.append(el("span", { text: "This is #" + on + "'s conversation. To ask about the cluster," }),
+				el("button", { type: "button", "class": "cw-chip-btn", text: "start a new conversation", onclick: pickNew }));
+			switchBar.hidden = false;
+			return;
+		}
 		if (!h || on === h.incident_id) {
 			switchBar.hidden = true;
 			return;
