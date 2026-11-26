@@ -389,7 +389,9 @@ func apiError(err error, verb string, obj Object) error {
 	switch {
 	case apierrors.IsNotFound(err):
 		return refuse("%s does not exist", obj)
-	case apierrors.IsForbidden(err) && strings.Contains(msg, "ValidatingAdmissionPolicy"):
+	// A policy denial is 422 Invalid for an update or delete and 403 for a
+	// create; either way the message names the policy.
+	case (apierrors.IsForbidden(err) || apierrors.IsInvalid(err)) && strings.Contains(msg, "ValidatingAdmissionPolicy"):
 		return refuse("the cluster's admission policy refused to let the actor %s %s: %s", verb, obj, msg)
 	case apierrors.IsForbidden(err):
 		return &Refusal{Forbidden: true, Reason: fmt.Sprintf(
