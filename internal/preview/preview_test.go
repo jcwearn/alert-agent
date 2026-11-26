@@ -26,7 +26,7 @@ func TestPreviewServes(t *testing.T) {
 	for _, p := range []string{"/", "/incidents/22", "/incidents/23", "/incidents/24", "/incidents/25", "/incidents/26", "/incidents/27", "/incidents/28", "/incidents/29", "/?paused=1", "/runs/41", "/runs/43",
 		"/runs/20", "/runs/29", "/runs/33", "/runs/36", "/runs/40",
 		"/api/chat/threads?page=/incidents/26", "/api/chat/threads/1", "/api/chat/threads/2", "/api/chat/threads/3",
-		"/api/chat/threads/4", "/api/chat/threads/5", "/api/chat/threads/6", "/api/chat/threads/7", "/static/chat.js"} {
+		"/api/chat/threads/4", "/api/chat/threads/5", "/api/chat/threads/6", "/api/chat/threads/7", "/static/chat.js", "/static/favicon.svg", "/static/apple-touch-icon.png", "/favicon.ico"} {
 		if status, body := get(p); status != http.StatusOK {
 			t.Errorf("GET %s: %d %s", p, status, body)
 		}
