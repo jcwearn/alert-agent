@@ -1,9 +1,11 @@
 package preview
 
 import (
+	"html"
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"regexp"
 	"strings"
 	"testing"
 )
@@ -63,5 +65,43 @@ func TestPreviewServes(t *testing.T) {
 	}
 	if _, body := get("/api/chat/threads/8"); !strings.Contains(body, `"active":{`) || !strings.Contains(body, `"title":"hello"`) {
 		t.Errorf("thread after a message: %s", body)
+	}
+}
+
+// The fixtures fill three home pages, and following the links (no
+// JavaScript) walks them without losing or repeating a family.
+func TestPreviewPages(t *testing.T) {
+	srv := httptest.NewServer(Handler())
+	defer srv.Close()
+	get := func(path string) string {
+		t.Helper()
+		resp, err := http.Get(srv.URL + path) //nolint:noctx // a test against a local server
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer func() { _ = resp.Body.Close() }()
+		b, _ := io.ReadAll(resp.Body)
+		return string(b)
+	}
+	nums := regexp.MustCompile(`class="num">#(\d+)`)
+	next := regexp.MustCompile(`href="([^"]*)" rel="next"`)
+	var seen []string
+	path, pages := "/", 0
+	for path != "" {
+		page := get(path)
+		pages++
+		for _, m := range nums.FindAllStringSubmatch(page, -1) {
+			seen = append(seen, m[1])
+		}
+		path = ""
+		if m := next.FindStringSubmatch(page); m != nil {
+			path = html.UnescapeString(m[1])
+		}
+	}
+	if pages != 3 || len(seen) != 29 {
+		t.Errorf("walked %d pages and %d incidents, want 3 and 29: %v", pages, len(seen), seen)
+	}
+	if got := nums.FindAllStringSubmatch(get("/?status=firing&ns=immich"), -1); len(got) != 1 || got[0][1] != "11" {
+		t.Errorf("firing in immich: %v", got)
 	}
 }

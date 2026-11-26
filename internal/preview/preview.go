@@ -25,7 +25,7 @@ import (
 
 // Handler is the UI over fixture data.
 func Handler() http.Handler {
-	s := controller.New(newFixtures(), controller.Options{PublicURL: "https://medic.example", ChatMaxPerThreadHour: 4, ChatMaxPerHour: 12}, nil, nil)
+	s := controller.New(newFixtures(), controller.Options{PublicURL: "https://medic.example", ChatMaxPerThreadHour: 4, ChatMaxPerHour: 12, ListPageSize: pageSize}, nil, nil)
 	// Turns the "awaiting review" list and PR abilities on; nothing here
 	// ever reaches GitHub, since no runner calls the tools.
 	s.EnablePRs(&controller.PRs{Repo: "example/homelab"}, nil)

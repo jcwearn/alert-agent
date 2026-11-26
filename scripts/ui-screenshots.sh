@@ -51,6 +51,11 @@ shot() {
 	echo "$out/$name-$device-$scheme.png"
 }
 
+# The fixtures' times follow the clock, so page 2's cursor does too: take
+# it from page 1's "Older" link.
+page2=$(curl -fsS "http://127.0.0.1:$port/" | sed -n 's/.*href="\([^"]*\)" rel="next".*/\1/p' | sed 's/&amp;/\&/g')
+[[ -n $page2 ]] || { echo "no Older link on the home page" >&2; exit 1; }
+
 for device in desktop phone; do
 	shot home-closed "$device" light "/"
 	shot incident-closed "$device" light "/incidents/25"
@@ -85,6 +90,12 @@ for device in desktop phone; do
 		shot approval-rejected "$device" $scheme "/incidents/23"
 		shot chat-approval-pending "$device" $scheme "/incidents/27?chat=open&thread=7"
 		shot chat-approval-decided "$device" $scheme "/incidents/29?chat=open&thread=6"
+		# The incident list: pages, filters (whole families), nothing found.
+		shot list-page1 "$device" $scheme "/" 2600
+		shot list-page2 "$device" $scheme "$page2" 1900
+		shot list-firing "$device" $scheme "/?status=firing&range=30d" 1700
+		shot list-family "$device" $scheme "/?ns=gateway" 1500
+		shot list-empty "$device" $scheme "/?q=etcd&status=bogus" 1400
 		# Opened after load, as a person opens it: the window starts hidden.
 		shot opened-new-general "$device" $scheme "/?chat=after&pending=general"
 		shot opened-incident "$device" $scheme "/incidents/27?chat=after"

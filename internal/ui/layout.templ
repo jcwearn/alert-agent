@@ -125,6 +125,20 @@ templ layout(title string) {
 				button.primary { background: var(--accent); color: var(--on-accent); border-color: var(--accent); font-weight: 600; }
 				.action-object { font-size: 12px; }
 				td.when { white-space: nowrap; }
+				.filters { display: grid; gap: 10px; }
+				.presets { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 6px; font-size: 14px; }
+				.presets .muted { margin-right: 4px; }
+				a.preset { text-decoration: none; padding: 2px 10px; border-radius: 999px; border: 1px solid var(--line); }
+				a.preset[aria-current] { background: var(--chip); border-color: var(--muted); font-weight: 600; }
+				.fields { display: flex; flex-wrap: wrap; align-items: end; gap: 10px 12px; }
+				.fields label { display: grid; gap: 2px; font-size: 13px; color: var(--muted); min-width: 0; }
+				.fields label.grow { flex: 1 1 180px; }
+				.fields input, .fields select { color: var(--fg); height: 34px; }
+				.fields input[type=search] { width: 100%; }
+				.filter-buttons { display: flex; align-items: center; gap: 12px; }
+				.pager { display: flex; justify-content: space-between; align-items: center; gap: 12px; margin: 12px 0; }
+				.pager span { display: flex; gap: 16px; }
+				@media (max-width: 640px) { .fields label { flex: 1 1 40%; } .fields input, .fields select { width: 100%; } }
 				/* A long alert name wraps rather than pushing the last column off a phone. */
 				@media (max-width: 640px) { .hide-narrow { display: none; } td a { overflow-wrap: break-word; } }
 			</style>
