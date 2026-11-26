@@ -42,6 +42,9 @@ func (s *Server) toolServer(ctx context.Context, run store.Run) *mcp.Server {
 	if s.prs != nil {
 		s.addProposeTool(srv, run)
 	}
+	if s.actions != nil {
+		s.addActionTools(srv, run)
+	}
 	return srv
 }
 

@@ -94,6 +94,13 @@ func (s *Server) chatContext(ctx context.Context, run store.Run) (runnerapi.Cont
 			rc.Alerts = apiAlerts(alerts)
 		}
 	}
+	if s.actions != nil && sc.incident != nil && run.IncidentID != 0 {
+		aps, err := s.store.IncidentApprovals(ctx, sc.incident.ID)
+		if err != nil {
+			return rc, err
+		}
+		rc.RequestApproval, rc.Approvals = true, apiApprovals(aps)
+	}
 	if pr := sc.pr; pr != nil {
 		rc.PR = &runnerapi.PR{Number: pr.Number, URL: pr.URL, Title: pr.Title, Branch: pr.Branch, HeadSHA: pr.HeadSHA,
 			Files: pr.Files, State: pr.State, Checks: pr.Checks}
@@ -123,6 +130,11 @@ func (s *Server) chatTools(ctx context.Context, srv *mcp.Server, run store.Run) 
 		s.addUpdateTool(srv, run)
 	case sc.propose:
 		s.addProposeTool(srv, run)
+	}
+	// The owner can ask for an action in an incident's conversation, but
+	// even then it takes their click: chat has no tool that acts.
+	if s.actions != nil && sc.incident != nil && run.IncidentID != 0 {
+		s.addApprovalTool(srv, run)
 	}
 }
 

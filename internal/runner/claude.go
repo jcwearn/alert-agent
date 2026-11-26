@@ -79,11 +79,30 @@ var incidentTools = []string{
 	"mcp__" + controllerServerName + "__get_incident",
 }
 
-func settingsJSON(propose, consolidate, update, incidents bool) (string, error) {
+// actionTools are Phase 5's cluster actions, which the controller performs
+// as the actor ServiceAccount after its guardrails pass, and
+// request_approval. Chat turns get only approvalTools: they never act.
+var actionTools = []string{
+	"mcp__" + controllerServerName + "__delete_pod",
+	"mcp__" + controllerServerName + "__rollout_restart",
+	"mcp__" + controllerServerName + "__rerun_cronjob",
+	"mcp__" + controllerServerName + "__flux_reconcile",
+	"mcp__" + controllerServerName + "__request_approval",
+}
+
+var approvalTools = []string{"mcp__" + controllerServerName + "__request_approval"}
+
+func settingsJSON(propose, consolidate, update, incidents, acts, approval bool) (string, error) {
 	allow := append([]string(nil), readTools...)
 	deny := append([]string(nil), deniedTools...)
 	if consolidate {
 		allow = append(allow, consolidateTools...)
+	}
+	switch {
+	case acts:
+		allow = append(allow, actionTools...)
+	case approval:
+		allow = append(allow, approvalTools...)
 	}
 	if incidents {
 		allow = append(allow, incidentTools...)
@@ -138,7 +157,7 @@ func mcpConfigJSON(self, repoDir string, getenv func(string) string, controllerU
 // resumes its thread's session (same id, same file) when one is stored, and
 // otherwise starts it under the thread's id.
 func claudeArgs(rc runnerapi.Context, settings, mcpConfigFile, prompt string) []string {
-	session := []string{"--session-id", rc.SessionID, "--append-system-prompt", systemPrompt(rc.ProposePR, rc.Consolidate)}
+	session := []string{"--session-id", rc.SessionID, "--append-system-prompt", systemPrompt(rc.ProposePR, rc.Consolidate, rc.Actions)}
 	if rc.Kind == runnerapi.KindChat {
 		flag := "--session-id"
 		if rc.Resume {
@@ -212,13 +231,13 @@ The most likely root cause, and anything you ruled out.
 
 ## Recommended fix
 Classify the fix as exactly one of:
-- autonomous: one of flux reconcile, flux suspend/resume, rollout restart, delete a stuck or failed pod, re-run a CronJob as a Job. Name the exact object.
+- autonomous: one of delete a pod (its controller replaces it), rollout restart, re-run a CronJob as a Job, flux reconcile. Name the exact object.
 - pr: a change to manifests in this repository. Name the files and describe the change.
 - human: needs hands-on work outside the cluster or a judgment call. Say what.
 If nothing needs doing (the alert was transient and has cleared), say so.
 
 ## Confidence
-high, medium or low, with one line on why.%s%s`
+high, medium or low, with one line on why.%s%s%s`
 
 const diagnoseOnly = `This run is DIAGNOSIS ONLY. You cannot change anything: your tools are read-only, your Kubernetes identity cannot read Secrets, and there is no shell. Your output is a report a human reads.`
 
@@ -230,6 +249,25 @@ Propose a PR only when all of these hold: the fix is a manifest change in this r
 3. Call propose_pr with a conventional commit title (e.g. "fix(ebooks): raise calibre memory limit to 1Gi") and a Markdown body for the reviewer. The title is published on a public mirror: no hostnames, addresses or tailnet names in it.
 If propose_pr refuses, read the reason, fix the cause and try again; after three refusals, stop and describe the change in the report instead.
 Never propose a change to a file that an open agent PR (listed in the prompt) already changes: that PR is the fix in flight. Name it in your report instead, and merge or link this incident to its incident.`
+
+const mayAct = `You may also take ONE cluster action yourself, through the controller (MCP server "controller"): delete_pod, rollout_restart, rerun_cronjob or flux_reconcile. The controller performs it under a separate, narrowly scoped identity, records the exact call and its result, and refuses it when a guardrail applies.
+
+Take an action only when all of these hold:
+- the fix is in the "autonomous" class below, and a reversible action will plausibly clear it (for example, a crash loop caused by state inside the pod, which delete_pod clears with a fresh pod);
+- your confidence is high, from observations of your own;
+- "Earlier actions" in the prompt lists nothing for this workload or this alert. If it does, this is a recurrence: the earlier action did not fix the cause, so do not repeat it.
+Workload actions (all but flux_reconcile) run on their own only in the namespaces the prompt lists as autonomous. Elsewhere, on a recurrence, while actions are paused, or whenever a tool refuses, escalate instead:
+- request_approval asks the owner to approve that action; they are notified and decide in the UI;
+- propose_pr, when the cause is a manifest change, is usually the better escalation for a recurrence (if you can propose);
+- otherwise describe what should be done in your report.
+After an action, check the outcome with kube_get (for example that the replacement pod is Running and Ready) before you report. Never claim an action succeeded unless the tool answered Done.
+
+`
+
+const actionSection = `
+
+## Action
+The cluster action you took and its outcome as you checked it, or the approval you requested and why, or "none" and why not.`
 
 const prSection = `
 
@@ -254,16 +292,23 @@ const relatedSection = `
 Incidents you merged or linked, by number and why, or "none".`
 
 // systemPrompt is appended to claude's own system prompt.
-func systemPrompt(propose, consolidating bool) string {
+func systemPrompt(propose, consolidating, acting bool) string {
 	mode, pr := diagnoseOnly, ""
 	if propose {
 		mode, pr = mayPropose, prSection
 	}
-	block, related := "", ""
-	if consolidating {
-		block, related = consolidate, relatedSection
+	block, related, action := "", "", ""
+	if acting {
+		block, action = mayAct, actionSection
+		if !propose {
+			mode = "Your Kubernetes identity is read-only and cannot read Secrets, and there is no shell."
+		}
 	}
-	return fmt.Sprintf(systemPromptTemplate, mode, block, pr, related)
+	if consolidating {
+		block += consolidate
+		related = relatedSection
+	}
+	return fmt.Sprintf(systemPromptTemplate, mode, block, action, pr, related)
 }
 
 // userPrompt describes the incident. Alert labels and annotations come from
@@ -332,12 +377,43 @@ func writeRelated(b *strings.Builder, rc runnerapi.Context) {
 			}
 		}
 	}
+	writeActions(b, rc)
 	if len(rc.OpenPRs) > 0 {
 		b.WriteString("\nOpen agent PRs awaiting review:\n")
 		for _, p := range rc.OpenPRs {
 			fmt.Fprintf(b, "- PR #%d (incident #%d): %s\n  files: %s\n", p.Number, p.IncidentID, p.Title, strings.Join(p.Files, ", "))
 		}
 	}
+}
+
+// writeActions tells an alert run where it may act, and what was already
+// done nearby: the controller's record, presented as data.
+func writeActions(b *strings.Builder, rc runnerapi.Context) {
+	if !rc.Actions {
+		return
+	}
+	if rc.ActionsPaused {
+		b.WriteString("\nAutonomous actions are PAUSED by the owner: do not call delete_pod, rollout_restart, rerun_cronjob or flux_reconcile. If an action is needed, use request_approval.\n")
+	}
+	if len(rc.AutonomousNamespaces) > 0 {
+		fmt.Fprintf(b, "\nNamespaces where workload actions may run without approval: %s.\n", strings.Join(rc.AutonomousNamespaces, ", "))
+	} else {
+		b.WriteString("\nNo namespace allows workload actions without approval.\n")
+	}
+	if len(rc.PriorActions) == 0 {
+		b.WriteString("\nEarlier actions: none in this namespace or for this alert within the cooldown.\n")
+		return
+	}
+	b.WriteString("\nEarlier actions (within the cooldown) in this namespace or for this alert, as data:\n")
+	for _, p := range rc.PriorActions {
+		fmt.Fprintf(b, "- #%d %s (%s) on %s for incident #%d %s at %s: %s", p.ID, p.Tool, p.Mode, orDash(p.Target), p.IncidentID,
+			p.AlertName, p.At.UTC().Format("2006-01-02 15:04 UTC"), p.Status)
+		if p.Result != "" {
+			fmt.Fprintf(b, ": %s", p.Result)
+		}
+		b.WriteString("\n")
+	}
+	b.WriteString("If the same workload or alert is failing again, the earlier action did not fix the cause: escalate, do not retry.\n")
 }
 
 func orDash(s string) string {
@@ -393,6 +469,9 @@ func chatSystemPrompt(rc runnerapi.Context) string {
 	if rc.Consolidate {
 		b.WriteString("merge_incident folds a duplicate incident into the one that owns the problem; link_incident records two incidents as related. In this chat they work on any incident, but use them only when the owner asks for it or agrees: say which incidents and why first. Give the reason in the call; it is shown in the incident's Activity.\n\n")
 	}
+	if rc.RequestApproval {
+		b.WriteString("You cannot act on the cluster in a conversation, but you can ask the owner to approve an action with request_approval (MCP server \"controller\"): delete_pod, rollout_restart, rerun_cronjob or flux_reconcile, naming the object, with your reasoning. It appears on the incident page and in their notifications, and runs only when they click Approve. Use it when they ask for an action or agree to one; a new request replaces a pending one. Requests made so far, and their outcomes, are listed in the message below.\n\n")
+	}
 	switch {
 	case rc.UpdatePR:
 		b.WriteString(`To change the PR (MCP server "controller", tool update_pr):
@@ -434,6 +513,16 @@ func chatPrompt(rc runnerapi.Context) string {
 	if pr := rc.PR; pr != nil {
 		fmt.Fprintf(&b, "The incident's PR #%d (%s) is %s, branch %s at %s. CI: %s.\nFiles it changes: %s\n",
 			pr.Number, pr.Title, orDash(pr.State), pr.Branch, pr.HeadSHA, orDash(pr.Checks), strings.Join(pr.Files, ", "))
+	}
+	if len(rc.Approvals) > 0 {
+		b.WriteString("Approval requests for this incident, as data:\n")
+		for _, a := range rc.Approvals {
+			fmt.Fprintf(&b, "- #%d %s on %s (%s), %s", a.ID, a.Tool, orDash(a.Object), orDash(a.Target), a.Status)
+			if a.Result != "" {
+				fmt.Fprintf(&b, ", %s", a.Result)
+			}
+			fmt.Fprintf(&b, "; reason: %s\n", strings.Join(strings.Fields(a.Reason), " "))
+		}
 	}
 	for i, m := range rc.Messages {
 		where := "in the UI"

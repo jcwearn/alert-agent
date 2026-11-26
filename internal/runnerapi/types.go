@@ -68,6 +68,49 @@ type Context struct {
 	Recent []RecentIncident `json:"recent,omitempty"`
 	// OpenPRs are the agent's PRs awaiting review, with the files they touch.
 	OpenPRs []OpenPR `json:"open_prs,omitempty"`
+
+	// Actions says the controller serves the cluster actions (delete_pod,
+	// rollout_restart, rerun_cronjob, flux_reconcile) and request_approval:
+	// an alert run with Phase 5 on.
+	Actions bool `json:"actions"`
+	// RequestApproval says the controller serves request_approval alone: a
+	// chat turn on an incident.
+	RequestApproval bool `json:"request_approval"`
+	// AutonomousNamespaces are where a workload action may run without a
+	// human; elsewhere it needs request_approval.
+	AutonomousNamespaces []string `json:"autonomous_namespaces,omitempty"`
+	// ActionsPaused says the owner has paused autonomous actions.
+	ActionsPaused bool `json:"actions_paused,omitempty"`
+	// PriorActions are cluster actions within the cooldown in this
+	// namespace or for this alert: a recurrence must escalate, not retry.
+	PriorActions []PriorAction `json:"prior_actions,omitempty"`
+	// Approvals are the requests made for this incident, with their outcome.
+	Approvals []Approval `json:"approvals,omitempty"`
+}
+
+// PriorAction is a recent cluster action the agent or a human took.
+type PriorAction struct {
+	ID         int64     `json:"id"`
+	IncidentID int64     `json:"incident_id"`
+	AlertName  string    `json:"alertname"`
+	Tool       string    `json:"tool"`
+	Mode       string    `json:"mode"` // autonomous or approved
+	Target     string    `json:"target"`
+	Status     string    `json:"status"`
+	Result     string    `json:"result"`
+	At         time.Time `json:"at"`
+}
+
+// Approval is a request for a human to approve a cluster action.
+type Approval struct {
+	ID     int64     `json:"id"`
+	Tool   string    `json:"tool"`
+	Target string    `json:"target"`
+	Object string    `json:"object"`
+	Reason string    `json:"reason"`
+	Status string    `json:"status"`
+	Result string    `json:"result,omitempty"`
+	At     time.Time `json:"at"`
 }
 
 // BatchIncident is another incident this run covers, with its alerts.

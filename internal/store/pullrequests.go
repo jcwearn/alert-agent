@@ -67,6 +67,12 @@ type Action struct {
 	Result           string
 	CreatedAt        time.Time
 	FinishedAt       *time.Time
+	// Mode is set on a cluster action: autonomous or approved.
+	Mode string
+	// Target is the workload a cluster action was about ("Kind ns/name"),
+	// and Object what it touched.
+	Target string
+	Object string
 }
 
 // IncidentActions returns the audit trail of everything done to or about an
@@ -75,7 +81,9 @@ type Action struct {
 func (s *Store) IncidentActions(ctx context.Context, incidentID int64) ([]Action, error) {
 	rows, err := s.pool.Query(ctx, `
 		SELECT id, actor, run_id, incident_id, target_incident_id, tool, input, status, result,
-			created_at, finished_at
+			created_at, finished_at, COALESCE(mode, ''),
+			CASE WHEN target_kind = '' THEN '' ELSE target_kind || ' ' || target_namespace || '/' || target_name END,
+			object
 		FROM actions WHERE incident_id = $1 OR target_incident_id = $1
 		ORDER BY id`, incidentID)
 	if err != nil {
@@ -87,7 +95,7 @@ func (s *Store) IncidentActions(ctx context.Context, incidentID int64) ([]Action
 		var a Action
 		var input []byte
 		if err := rows.Scan(&a.ID, &a.Actor, &a.RunID, &a.IncidentID, &a.TargetIncidentID, &a.Tool, &input,
-			&a.Status, &a.Result, &a.CreatedAt, &a.FinishedAt); err != nil {
+			&a.Status, &a.Result, &a.CreatedAt, &a.FinishedAt, &a.Mode, &a.Target, &a.Object); err != nil {
 			return nil, err
 		}
 		a.Input = input

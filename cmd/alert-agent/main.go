@@ -25,6 +25,7 @@ import (
 	"k8s.io/client-go/restmapper"
 	"k8s.io/client-go/tools/clientcmd"
 
+	"github.com/jcwearn/alert-agent/internal/actions"
 	"github.com/jcwearn/alert-agent/internal/controller"
 	"github.com/jcwearn/alert-agent/internal/dispatch"
 	"github.com/jcwearn/alert-agent/internal/github"
@@ -121,8 +122,64 @@ func runController(ctx context.Context) error {
 			slog.Info("PR comments enabled", "logins", c.AllowedLogins, "interval", c.Interval)
 		}
 	}
+	if os.Getenv("ACTIONS_ENABLED") == "true" {
+		a, err := newActions(notifier)
+		if err != nil {
+			return err
+		}
+		srv.EnableActions(a)
+		slog.Info("actions enabled", "autonomous_namespaces", len(a.Autonomous), "cooldown", a.Guardrails.Cooldown,
+			"max_per_hour", a.Guardrails.MaxPerHour, "approval_ttl", a.ApprovalTTL, "notifiers", len(a.Notify))
+	}
 	go d.Run(ctx)
 	return srv.Run(ctx, addrs[0], addrs[1], addrs[2])
+}
+
+// newActions sets up Phase 5. The actor clients impersonate the actor
+// ServiceAccount, which the controller's own RBAC permits and nothing else:
+// the controller's identity gains no write of its own, and the API server's
+// audit log names both.
+func newActions(slack controller.Notifier) (*controller.Actions, error) {
+	cfg, err := rest.InClusterConfig()
+	if err != nil {
+		return nil, fmt.Errorf("kubernetes config: %w", err)
+	}
+	ns := envOr("POD_NAMESPACE", "alert-agent")
+	sa := envOr("ACTOR_SERVICE_ACCOUNT", "alert-agent-actor")
+	cfg = rest.CopyConfig(cfg)
+	cfg.Impersonate = rest.ImpersonationConfig{UserName: "system:serviceaccount:" + ns + ":" + sa}
+	core, err := kubernetes.NewForConfig(cfg)
+	if err != nil {
+		return nil, err
+	}
+	dyn, err := dynamic.NewForConfig(cfg)
+	if err != nil {
+		return nil, err
+	}
+
+	autonomous := map[string]bool{}
+	for _, v := range strings.Split(os.Getenv("ACTION_AUTONOMOUS_NAMESPACES"), ",") {
+		if v = strings.TrimSpace(v); v != "" {
+			autonomous[v] = true
+		}
+	}
+	var notify []controller.ApprovalNotifier
+	if base, token := os.Getenv("NTFY_URL"), os.Getenv("NTFY_TOKEN"); base != "" && token != "" {
+		notify = append(notify, &controller.NtfyReviewer{BaseURL: base, Topic: envOr("NTFY_TOPIC", "medic"), Token: token})
+	}
+	if n, ok := slack.(controller.ApprovalNotifier); ok {
+		notify = append(notify, n)
+	}
+	return &controller.Actions{
+		Actor:      &actions.Executor{Core: core, Dynamic: dyn, Actor: sa},
+		Autonomous: autonomous,
+		Guardrails: store.Guardrails{
+			Cooldown:   envDuration("ACTION_COOLDOWN", 6*time.Hour),
+			MaxPerHour: envInt("ACTION_MAX_PER_HOUR", 3),
+		},
+		ApprovalTTL: envDuration("APPROVAL_TTL", 2*time.Hour),
+		Notify:      notify,
+	}, nil
 }
 
 func githubApp() (*github.App, error) {

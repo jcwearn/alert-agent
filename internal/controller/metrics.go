@@ -3,6 +3,9 @@ package controller
 import (
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/collectors"
+
+	"github.com/jcwearn/alert-agent/internal/actions"
+	"github.com/jcwearn/alert-agent/internal/store"
 )
 
 type metrics struct {
@@ -14,6 +17,8 @@ type metrics struct {
 
 	consolidations *prometheus.CounterVec
 	comments       *prometheus.CounterVec
+	actions        *prometheus.CounterVec
+	approvals      *prometheus.CounterVec
 }
 
 func newMetrics() *metrics {
@@ -43,6 +48,14 @@ func newMetrics() *metrics {
 			Name: "alert_agent_pr_comments_total",
 			Help: "Comments on agent PRs seen by the poller, by outcome: queued (a new turn), joined (a waiting turn), capped, ignored (not an allowlisted person: the App itself, bots, others), and replies posted.",
 		}, []string{"outcome"}),
+		actions: prometheus.NewCounterVec(prometheus.CounterOpts{
+			Name: "alert_agent_actions_total",
+			Help: "Cluster actions, by tool, mode (autonomous or approved) and outcome (succeeded, rejected, failed).",
+		}, []string{"tool", "mode", "outcome"}),
+		approvals: prometheus.NewCounterVec(prometheus.CounterOpts{
+			Name: "alert_agent_approvals_total",
+			Help: "Approval requests, by event: requested, approved, rejected, expired, superseded.",
+		}, []string{"event"}),
 	}
 	// Pre-create every series so a rate() over them works from the first
 	// scrape rather than from the first occurrence.
@@ -69,8 +82,18 @@ func newMetrics() *metrics {
 	for _, o := range []string{"queued", "joined", "capped", "ignored", "replied", "reply_failed"} {
 		m.comments.WithLabelValues(o)
 	}
+	for _, tool := range actions.Tools {
+		for _, mode := range []string{store.ModeAutonomous, store.ModeApproved} {
+			for _, o := range []string{store.ActionSucceeded, store.ActionRejected, store.ActionFailed} {
+				m.actions.WithLabelValues(tool, mode, o)
+			}
+		}
+	}
+	for _, e := range []string{"requested", "approved", "rejected", "expired", "superseded"} {
+		m.approvals.WithLabelValues(e)
+	}
 	m.registry.MustRegister(
-		m.webhooks, m.incidents, m.runs, m.prs, m.consolidations, m.comments,
+		m.webhooks, m.incidents, m.runs, m.prs, m.consolidations, m.comments, m.actions, m.approvals,
 		collectors.NewGoCollector(),
 		collectors.NewProcessCollector(collectors.ProcessCollectorOpts{}),
 	)

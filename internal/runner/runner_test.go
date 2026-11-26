@@ -321,7 +321,7 @@ func parseSettings(t *testing.T, propose bool) perms {
 
 func parseSettingsWith(t *testing.T, propose, consolidate bool) perms {
 	t.Helper()
-	s, err := settingsJSON(propose, consolidate, false, false)
+	s, err := settingsJSON(propose, consolidate, false, false, false, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -646,5 +646,57 @@ func TestRunIncidentThreadWithoutPR(t *testing.T) {
 	}
 	if gitArgs := read(t, dir, "git.args"); !strings.Contains(gitArgs, "--branch main") {
 		t.Errorf("git args %q, want main", gitArgs)
+	}
+}
+
+func TestActionSettings(t *testing.T) {
+	parse := func(acts, approval bool) perms {
+		s, err := settingsJSON(false, true, false, false, acts, approval)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var parsed struct{ Permissions perms }
+		if err := json.Unmarshal([]byte(s), &parsed); err != nil {
+			t.Fatal(err)
+		}
+		return parsed.Permissions
+	}
+	run := parse(true, false)
+	for _, tool := range []string{"delete_pod", "rollout_restart", "rerun_cronjob", "flux_reconcile", "request_approval"} {
+		if !contains(run.Allow, "mcp__controller__"+tool) {
+			t.Errorf("alert run: %s not allowed", tool)
+		}
+	}
+	chat := parse(false, true)
+	if !contains(chat.Allow, "mcp__controller__request_approval") || contains(chat.Allow, "mcp__controller__delete_pod") {
+		t.Errorf("chat turn allow = %v", chat.Allow)
+	}
+	if off := parse(false, false); contains(off.Allow, "mcp__controller__request_approval") {
+		t.Errorf("actions off still allows request_approval")
+	}
+}
+
+func TestActionPrompts(t *testing.T) {
+	sp := systemPrompt(true, true, true)
+	for _, want := range []string{"ONE cluster action", "recurrence", "request_approval", "## Action"} {
+		if !strings.Contains(sp, want) {
+			t.Errorf("system prompt lacks %q", want)
+		}
+	}
+	if off := systemPrompt(true, true, false); strings.Contains(off, "## Action") || strings.Contains(off, "request_approval") {
+		t.Error("actions off still describes them")
+	}
+
+	at := time.Date(2026, 11, 25, 20, 0, 0, 0, time.UTC)
+	p := userPrompt(runnerapi.Context{
+		Incident: runnerapi.Incident{ID: 2, AlertName: "KubePodCrashLooping", Namespace: "drill"},
+		Actions:  true, ActionsPaused: true, AutonomousNamespaces: []string{"drill", "ebooks"},
+		PriorActions: []runnerapi.PriorAction{{ID: 9, IncidentID: 1, AlertName: "KubePodCrashLooping", Tool: "delete_pod",
+			Mode: "autonomous", Target: "Deployment drill/lock-keeper", Status: "succeeded", Result: "DELETE pods drill/lock-keeper-x", At: at}},
+	})
+	for _, want := range []string{"PAUSED", "without approval: drill, ebooks", "#9 delete_pod (autonomous) on Deployment drill/lock-keeper for incident #1", "escalate, do not retry"} {
+		if !strings.Contains(p, want) {
+			t.Errorf("user prompt lacks %q:\n%s", want, p)
+		}
 	}
 }
