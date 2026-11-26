@@ -13,7 +13,7 @@ import (
 // with the types a browser expects.
 func TestIcons(t *testing.T) {
 	var b strings.Builder
-	if err := IncidentList(nil, nil, nil, time.Now()).Render(context.Background(), &b); err != nil {
+	if err := IncidentDetail(IncidentPage{Now: time.Now()}).Render(context.Background(), &b); err != nil {
 		t.Fatal(err)
 	}
 	for _, want := range []string{
