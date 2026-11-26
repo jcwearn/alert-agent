@@ -21,6 +21,9 @@ type fakeStore struct {
 	recorded  []alertmanager.Payload
 	incidents []store.Incident
 	alerts    []store.IncidentAlert
+	// the last home page query
+	listFilter            store.IncidentFilter
+	listBefore, listAfter *store.Cursor
 
 	enqueued  []int64
 	holds     []time.Duration
@@ -108,6 +111,15 @@ func (f *fakeStore) RecordWebhook(_ context.Context, _ []byte, p alertmanager.Pa
 
 func (f *fakeStore) ListIncidents(context.Context, int) ([]store.Incident, error) {
 	return f.incidents, nil
+}
+
+func (f *fakeStore) ListIncidentPage(_ context.Context, flt store.IncidentFilter, before, after *store.Cursor, _ int) (store.IncidentListPage, error) {
+	f.listFilter, f.listBefore, f.listAfter = flt, before, after
+	return store.IncidentListPage{Incidents: f.incidents}, nil
+}
+
+func (f *fakeStore) IncidentFacets(context.Context) (namespaces, severities []string, err error) {
+	return []string{"ebooks"}, []string{"warning"}, nil
 }
 
 func (f *fakeStore) GetIncident(_ context.Context, id int64) (store.Incident, []store.IncidentAlert, error) {

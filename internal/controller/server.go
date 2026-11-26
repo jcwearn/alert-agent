@@ -28,6 +28,8 @@ type Store interface {
 	Ping(ctx context.Context) error
 	RecordWebhook(ctx context.Context, raw []byte, p alertmanager.Payload) (store.RecordResult, error)
 	ListIncidents(ctx context.Context, limit int) ([]store.Incident, error)
+	ListIncidentPage(ctx context.Context, f store.IncidentFilter, before, after *store.Cursor, limit int) (store.IncidentListPage, error)
+	IncidentFacets(ctx context.Context) (namespaces, severities []string, err error)
 	GetIncident(ctx context.Context, id int64) (store.Incident, []store.IncidentAlert, error)
 	EnqueueRun(ctx context.Context, incidentID int64, hold time.Duration) (int64, bool, error)
 	RunIncidents(ctx context.Context, runID int64) ([]int64, error)
@@ -112,6 +114,9 @@ type Options struct {
 	// ChatMaxPerHour caps the chat turns all PRs together start in an hour.
 	// Chat turns do not count against the alert runs' RUN_MAX_PER_HOUR.
 	ChatMaxPerHour int
+	// ListPageSize is how many incident families the home page shows; 0 is
+	// the default (50).
+	ListPageSize int
 }
 
 // Waker is told when there may be work for the dispatcher.
@@ -268,11 +273,27 @@ func (s *Server) enqueue(ctx context.Context, incidentID int64, hold time.Durati
 }
 
 func (s *Server) incidentList(w http.ResponseWriter, r *http.Request) {
-	incidents, err := s.store.ListIncidents(r.Context(), 200)
+	q := parseListQuery(r.URL.Query(), s.now())
+	size := s.opts.ListPageSize
+	if size <= 0 {
+		size = defaultListPageSize
+	}
+	page, err := s.store.ListIncidentPage(r.Context(), q.filter, q.before, q.after, size)
 	if err != nil {
 		slog.Error("listing incidents", "err", err)
 		http.Error(w, "could not load incidents", http.StatusInternalServerError)
 		return
+	}
+	view := ui.IncidentListView{Rows: ui.GroupIncidents(page.Incidents), Query: q.form, Problems: q.problems,
+		Paged: q.before != nil || q.after != nil}
+	if page.Newer != nil {
+		view.Newer = page.Newer.String()
+	}
+	if page.Older != nil {
+		view.Older = page.Older.String()
+	}
+	if view.Namespaces, view.Severities, err = s.store.IncidentFacets(r.Context()); err != nil {
+		slog.Error("listing incident facets", "err", err)
 	}
 	var awaiting []store.PullRequest
 	if s.prs != nil {
@@ -286,7 +307,7 @@ func (s *Server) incidentList(w http.ResponseWriter, r *http.Request) {
 			slog.Error("listing approvals", "err", err)
 		}
 	}
-	s.render(w, r, ui.IncidentList(ui.GroupIncidents(incidents), awaiting, approvals, s.now()))
+	s.render(w, r, ui.IncidentList(view, awaiting, approvals, s.now()))
 }
 
 func (s *Server) incidentDetail(w http.ResponseWriter, r *http.Request) {

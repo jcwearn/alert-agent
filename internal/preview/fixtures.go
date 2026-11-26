@@ -70,6 +70,7 @@ func newFixtures() *fixtures {
 		{ID: 22, AlertName: "KubePersistentVolumeFillingUp", Namespace: "media", Severity: "warning", AlertStatus: "resolved",
 			Summary: "media/library is 92% full", OpenedAt: ago(31 * time.Hour), ResolvedAt: ptr(ago(28 * time.Hour)), AlertCount: 1, Links: []int64{23}},
 	}
+	f.incidents = append(f.incidents, history(now)...)
 	for i := range f.incidents {
 		in := &f.incidents[i]
 		in.UpdatedAt = in.OpenedAt

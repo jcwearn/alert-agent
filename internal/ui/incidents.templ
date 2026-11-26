@@ -2,13 +2,14 @@ package ui
 
 import (
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/jcwearn/alert-agent/internal/store"
 )
 
 // IncidentList is the home page.
-templ IncidentList(incidents []IncidentRow, awaiting []store.PullRequest, approvals []store.Approval, now time.Time) {
+templ IncidentList(v IncidentListView, awaiting []store.PullRequest, approvals []store.Approval, now time.Time) {
 	@layout("Incidents") {
 		@actionsSwitch()
 		@approvalList(approvals, now)
@@ -46,8 +47,18 @@ templ IncidentList(incidents []IncidentRow, awaiting []store.PullRequest, approv
 			</div>
 		}
 		<h1>Incidents</h1>
-		if len(incidents) == 0 {
-			<p class="muted">No incidents yet. They appear here when Alertmanager sends one.</p>
+		@incidentFilters(v)
+		if len(v.Problems) > 0 {
+			<div class="card notice error">{ "Ignored " + strings.Join(v.Problems, "; ") + "." }</div>
+		}
+		if len(v.Rows) == 0 {
+			if v.Query.Active() {
+				<p class="muted">No incidents match these filters. <a href="/">Clear filters</a></p>
+			} else if v.Paged {
+				<p class="muted">Nothing more this way. <a href="/">Back to the newest</a></p>
+			} else {
+				<p class="muted">No incidents yet. They appear here when Alertmanager sends one.</p>
+			}
 		} else {
 			<div class="table-wrap">
 				<table>
@@ -61,7 +72,7 @@ templ IncidentList(incidents []IncidentRow, awaiting []store.PullRequest, approv
 						</tr>
 					</thead>
 					<tbody>
-						for _, in := range incidents {
+						for _, in := range v.Rows {
 							<tr>
 								<td>
 									@statusBadge(in.Status)
@@ -104,7 +115,85 @@ templ IncidentList(incidents []IncidentRow, awaiting []store.PullRequest, approv
 					</tbody>
 				</table>
 			</div>
+			@pager(v)
 		}
+	}
+}
+
+// incidentFilters is the list's filter form: a plain GET, so it works
+// without JavaScript and a filtered view is a link.
+templ incidentFilters(v IncidentListView) {
+	<form class="card filters" method="get" action="/">
+		<div class="presets">
+			<span class="muted">Opened</span>
+			for _, p := range rangePresets {
+				if v.Query.presetCurrent(p.Value) {
+					<a class="preset" aria-current="true" href={ v.Query.presetURL(p.Value) }>{ p.Label }</a>
+				} else {
+					<a class="preset" href={ v.Query.presetURL(p.Value) }>{ p.Label }</a>
+				}
+			}
+		</div>
+		<div class="fields">
+			<label><span>From</span><input type="date" name="from" value={ v.Query.From }/></label>
+			<label><span>To</span><input type="date" name="to" value={ v.Query.To }/></label>
+			<label>
+				<span>Status</span>
+				<select name="status">
+					<option value="">any</option>
+					for _, st := range []string{"firing", "resolved"} {
+						<option value={ st } selected?={ v.Query.Status == st }>{ st }</option>
+					}
+				</select>
+			</label>
+			<label>
+				<span>Namespace</span>
+				<select name="ns">
+					<option value="">any</option>
+					for _, ns := range options(v.Namespaces, v.Query.Namespace) {
+						<option value={ ns } selected?={ v.Query.Namespace == ns }>{ ns }</option>
+					}
+				</select>
+			</label>
+			<label>
+				<span>Severity</span>
+				<select name="sev">
+					<option value="">any</option>
+					for _, sev := range options(v.Severities, v.Query.Severity) {
+						<option value={ sev } selected?={ v.Query.Severity == sev }>{ sev }</option>
+					}
+				</select>
+			</label>
+			<label class="grow"><span>Alert</span><input type="search" name="q" value={ v.Query.Search } placeholder="name contains…" maxlength="200"/></label>
+			if v.Query.Range != "" && v.Query.From == "" && v.Query.To == "" {
+				<input type="hidden" name="range" value={ v.Query.Range }/>
+			}
+			<div class="filter-buttons">
+				<button type="submit" class="primary">Filter</button>
+				if v.Query.Active() {
+					<a href="/">Clear</a>
+				}
+			</div>
+		</div>
+	</form>
+}
+
+// pager links the neighbouring pages, keeping the filters.
+templ pager(v IncidentListView) {
+	if v.Paged || v.Newer != "" || v.Older != "" {
+		<nav class="pager" aria-label="Pages">
+			<span>
+				if v.Paged {
+					<a href={ v.Query.pageURL("", "") }>« Newest</a>
+				}
+				if v.Newer != "" {
+					<a href={ v.Query.pageURL("after", v.Newer) } rel="prev">‹ Newer</a>
+				}
+			</span>
+			if v.Older != "" {
+				<a href={ v.Query.pageURL("before", v.Older) } rel="next">Older ›</a>
+			}
+		</nav>
 	}
 }
 
