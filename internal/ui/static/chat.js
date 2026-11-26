@@ -409,7 +409,13 @@
 		log.append(intro());
 		var msgs = view ? view.messages : [];
 		if (!msgs.length && !busy()) { log.append(suggestions()); }
-		msgs.forEach(function (msg) { log.append(message(msg)); });
+		// Approval requests sit in the conversation at the time they were made.
+		var items = msgs.map(function (m) { return { at: m.created_at, el: function () { return message(m); } }; });
+		((view && view.approvals) || []).forEach(function (a) {
+			items.push({ at: a.created_at, el: function () { return approval(a); } });
+		});
+		items.sort(function (x, y) { return new Date(x.at) - new Date(y.at); });
+		items.forEach(function (it) { log.append(it.el()); });
 		live = null;
 		if (busy()) { renderLive(); }
 	}
@@ -458,6 +464,37 @@
 			kids.push(el("div", { "class": "cw-note cw-note-" + msg.status, text: notes[msg.status] }));
 		}
 		return el("article", { "class": "cw-msg cw-" + msg.source }, kids);
+	}
+
+	// approval is a request for the owner to approve a cluster action. The
+	// buttons are the incident page's own form posts, which land there.
+	function approval(a) {
+		var head = el("div", { "class": "cw-meta" }, [
+			el("span", { "class": "cw-author", text: "Approval request" }), " · ",
+			el("time", { datetime: a.created_at, title: new Date(a.created_at).toLocaleString(), text: clock(a.created_at) }), " · ",
+			el("a", { href: "/runs/" + a.run_id, text: "run #" + a.run_id })
+		]);
+		var kids = [head,
+			el("div", { "class": "cw-approval-what" }, [
+				el("span", { "class": "status status-" + a.status, text: a.status }), " ",
+				el("code", { text: a.tool }), " on ", el("code", { text: a.object })
+			]),
+			el("div", { "class": "cw-body cw-text", text: a.reason }),
+			el("div", { "class": "cw-note", text: a.when })];
+		if (a.action_status) {
+			kids.push(el("div", { "class": "cw-approval-result" }, [
+				el("span", { "class": "status status-" + a.action_status, text: a.action_status }), " ",
+				el("code", { text: a.action_result })
+			]));
+		}
+		if (a.status === "pending") {
+			var btn = function (verb, label, cls) {
+				return el("form", { method: "post", action: "/approvals/" + a.id + "/" + verb },
+					[el("button", { type: "submit", "class": cls, text: label })]);
+			};
+			kids.push(el("div", { "class": "cw-approval-buttons" }, [btn("approve", "Approve", "cw-primary"), btn("reject", "Reject", "")]));
+		}
+		return el("article", { "class": "cw-msg cw-approval cw-approval-" + a.status }, kids);
 	}
 
 	var live = null;

@@ -101,11 +101,32 @@ templ layout(title string) {
 				.chip.kind { font-size: 12px; margin-left: 6px; }
 				.title-row { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 12px; }
 				.title-row h1 { margin: 0; }
+				.status-approved, .status-on { color: var(--resolved); background: var(--resolved-bg); }
+				.status-expired, .status-superseded { color: var(--muted); background: var(--chip); }
+				.status-paused { color: var(--firing); background: var(--firing-bg); }
+				.banner { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px 16px;
+					padding: 10px 16px; background: var(--firing-bg); border-bottom: 1px solid var(--firing); }
+				.banner form, .switch form { margin: 0; }
+				.switch { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px 16px; }
+				.switch .status { margin: 0 4px; }
+				.approval-pending { border-color: var(--fg); }
+				.approval p { margin: 0 0 6px; }
+				.approval-head { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 6px; }
+				.approval-head a { margin-left: auto; }
+				.approval-reason { overflow-wrap: anywhere; }
+				.approval-meta { font-size: 13px; }
+				.approval-result { margin: 6px 0 0; display: flex; gap: 6px; align-items: baseline; }
+				.approval-result .mono { font-size: 12px; }
+				.approval-buttons { display: flex; gap: 8px; margin-top: 8px; }
+				.approval-buttons form { margin: 0; }
+				button.primary { background: var(--accent); color: var(--on-accent); border-color: var(--accent); font-weight: 600; }
+				.action-object { font-size: 12px; }
 				@media (max-width: 640px) { .hide-narrow { display: none; } }
 			</style>
 		</head>
 		<body>
 			<header><a href="/">alert-agent</a></header>
+			@pauseBanner()
 			<main>
 				{ children... }
 			</main>

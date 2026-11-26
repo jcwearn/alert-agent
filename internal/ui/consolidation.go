@@ -23,9 +23,12 @@ type IncidentPage struct {
 	Links      []store.Link
 	Actions    []store.Action
 	Candidates []store.Incident
+	// Approvals are the requests the agent made for this incident's family.
+	Approvals []store.Approval
 	// Notice and Problem report the outcome of the last form post.
 	Notice  string
 	Problem string
+	Now     time.Time
 }
 
 // IncidentRow is one row of the home page: an incident and the incidents

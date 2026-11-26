@@ -23,10 +23,10 @@ func TestPreviewServes(t *testing.T) {
 		b, _ := io.ReadAll(resp.Body)
 		return resp.StatusCode, string(b)
 	}
-	for _, p := range []string{"/", "/incidents/22", "/incidents/23", "/incidents/24", "/incidents/25", "/incidents/26", "/incidents/27",
+	for _, p := range []string{"/", "/incidents/22", "/incidents/23", "/incidents/24", "/incidents/25", "/incidents/26", "/incidents/27", "/incidents/28", "/incidents/29", "/?paused=1", "/runs/41", "/runs/43",
 		"/runs/20", "/runs/29", "/runs/33", "/runs/36", "/runs/40",
 		"/api/chat/threads?page=/incidents/26", "/api/chat/threads/1", "/api/chat/threads/2", "/api/chat/threads/3",
-		"/api/chat/threads/4", "/api/chat/threads/5", "/static/chat.js"} {
+		"/api/chat/threads/4", "/api/chat/threads/5", "/api/chat/threads/6", "/api/chat/threads/7", "/static/chat.js"} {
 		if status, body := get(p); status != http.StatusOK {
 			t.Errorf("GET %s: %d %s", p, status, body)
 		}
@@ -55,13 +55,13 @@ func TestPreviewServes(t *testing.T) {
 		}
 		return string(b)
 	}
-	if out := post("/api/chat/threads", `{"kind":"general"}`); !strings.Contains(out, `"id":6`) {
+	if out := post("/api/chat/threads", `{"kind":"general"}`); !strings.Contains(out, `"id":8`) {
 		t.Errorf("new thread: %s", out)
 	}
-	if out := post("/api/chat/threads/6/messages", `{"body":"hello","page":"/"}`); !strings.Contains(out, `"new_turn":true`) {
+	if out := post("/api/chat/threads/8/messages", `{"body":"hello","page":"/"}`); !strings.Contains(out, `"new_turn":true`) {
 		t.Errorf("message: %s", out)
 	}
-	if _, body := get("/api/chat/threads/6"); !strings.Contains(body, `"active":{`) || !strings.Contains(body, `"title":"hello"`) {
+	if _, body := get("/api/chat/threads/8"); !strings.Contains(body, `"active":{`) || !strings.Contains(body, `"title":"hello"`) {
 		t.Errorf("thread after a message: %s", body)
 	}
 }

@@ -1,0 +1,115 @@
+package ui
+
+import (
+	"strconv"
+	"time"
+
+	"github.com/jcwearn/alert-agent/internal/store"
+)
+
+// pauseBanner shows on every page while autonomous actions are paused.
+templ pauseBanner() {
+	if st := actionState(ctx); st.Enabled && st.Paused {
+		<div class="banner" role="status">
+			<span>
+				<strong>Autonomous actions are paused</strong>
+				<span class="muted">since { stamp(st.At) }.</span>
+				The agent still diagnoses and can ask you to approve an action, but takes none on its own.
+			</span>
+			<form method="post" action="/actions/resume">
+				<input type="hidden" name="back" value={ st.Path }/>
+				<button type="submit">Resume</button>
+			</form>
+		</div>
+	}
+}
+
+// actionsSwitch is the home page's pause control.
+templ actionsSwitch() {
+	if st := actionState(ctx); st.Enabled {
+		<div class="card switch">
+			if st.Paused {
+				<span>
+					<strong>Autonomous actions:</strong>
+					@statusBadge("paused")
+					<span class="muted">The agent asks before every action.</span>
+				</span>
+				<form method="post" action="/actions/resume">
+					<input type="hidden" name="back" value="/"/>
+					<button type="submit">Resume</button>
+				</form>
+			} else {
+				<span>
+					<strong>Autonomous actions:</strong>
+					@statusBadge("on")
+					<span class="muted">At most one reversible action per incident; a recurrence asks you first.</span>
+				</span>
+				<form method="post" action="/actions/pause">
+					<input type="hidden" name="back" value="/"/>
+					<button type="submit">Pause</button>
+				</form>
+			}
+		</div>
+	}
+}
+
+// approvalList is the home page's "Awaiting approval".
+templ approvalList(aps []store.Approval, now time.Time) {
+	if len(aps) > 0 {
+		<h1>Awaiting approval ({ strconv.Itoa(len(aps)) })</h1>
+		for _, ap := range aps {
+			@approvalCard(ap, now, true)
+		}
+	}
+}
+
+// approvalCard is one request: what the agent wants to do and why, and
+// either the buttons or how it ended.
+templ approvalCard(ap store.Approval, now time.Time, withIncident bool) {
+	<div class={ "card", "approval", "approval-" + ap.Status }>
+		<p class="approval-head">
+			@statusBadge(ap.Status)
+			<span class="mono">{ ap.Tool }</span>
+			<span>on</span>
+			<span class="mono">{ ap.Object }</span>
+			if withIncident {
+				<a class="muted" href={ incidentURL(ap.IncidentID) }>incident { idStr(ap.IncidentID) }</a>
+			}
+		</p>
+		<p class="approval-reason">{ ap.Reason }</p>
+		<p class="muted approval-meta">
+			if t := ap.Target(); t != "" && t != ap.Object {
+				{ t } ·
+			}
+			asked by <a href={ runURL(ap.RunID) }>run #{ strconv.FormatInt(ap.RunID, 10) }</a>
+			<span title={ stamp(ap.CreatedAt) }>{ ago(ap.CreatedAt, now) }</span>
+			· { ApprovalWhen(ap, now) }
+		</p>
+		if ap.ActionStatus != "" {
+			<div class="approval-result">
+				@statusBadge(ap.ActionStatus)
+				<span class="mono">{ ap.ActionResult }</span>
+			</div>
+		}
+		if ap.Status == store.ApprovalPending {
+			<div class="approval-buttons">
+				<form method="post" action={ approvalURL(ap.ID, "approve") }>
+					<button type="submit" class="primary">Approve</button>
+				</form>
+				<form method="post" action={ approvalURL(ap.ID, "reject") }>
+					<button type="submit">Reject</button>
+				</form>
+			</div>
+		}
+	</div>
+}
+
+// approvalSection lists an incident's requests, newest first.
+templ approvalSection(aps []store.Approval, now time.Time) {
+	if len(aps) > 0 {
+		<h2>Approvals ({ strconv.Itoa(len(aps)) })</h2>
+		for i := len(aps) - 1; i >= 0; i-- {
+			@approvalCard(aps[i], now, false)
+		}
+	}
+}

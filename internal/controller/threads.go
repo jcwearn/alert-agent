@@ -542,6 +542,28 @@ func toAPIMessage(m store.ChatMessage) apiMessage {
 	return out
 }
 
+// apiApproval is an approval request as the chat window shows it, in the
+// conversation at the time it was made.
+type apiApproval struct {
+	ID           int64     `json:"id"`
+	Tool         string    `json:"tool"`
+	Object       string    `json:"object"`
+	Target       string    `json:"target,omitempty"`
+	Reason       string    `json:"reason"`
+	Status       string    `json:"status"`
+	RunID        int64     `json:"run_id"`
+	When         string    `json:"when"`
+	ActionStatus string    `json:"action_status,omitempty"`
+	ActionResult string    `json:"action_result,omitempty"`
+	CreatedAt    time.Time `json:"created_at"`
+}
+
+func toAPIApproval(ap store.Approval, now time.Time) apiApproval {
+	return apiApproval{ID: ap.ID, Tool: ap.Tool, Object: ap.Object, Target: ap.Target(), Reason: ap.Reason, Status: ap.Status,
+		RunID: ap.RunID, When: ui.ApprovalWhen(ap, now), ActionStatus: ap.ActionStatus, ActionResult: ap.ActionResult,
+		CreatedAt: ap.CreatedAt}
+}
+
 // pageLabel is the short chip for where a message was sent from.
 func pageLabel(path string) string {
 	switch {
@@ -663,17 +685,29 @@ func (s *Server) apiThread(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	out := struct {
-		Thread   apiThread    `json:"thread"`
-		Messages []apiMessage `json:"messages"`
-		Active   any          `json:"active"`
-		PR       any          `json:"pr"`
-		Can      []string     `json:"can"`
-	}{Thread: toAPIThread(th), Messages: []apiMessage{}, Can: []string{"read the cluster", "read incidents", "merge and link incidents"}}
+		Thread    apiThread     `json:"thread"`
+		Messages  []apiMessage  `json:"messages"`
+		Approvals []apiApproval `json:"approvals"`
+		Active    any           `json:"active"`
+		PR        any           `json:"pr"`
+		Can       []string      `json:"can"`
+	}{Thread: toAPIThread(th), Messages: []apiMessage{}, Approvals: []apiApproval{},
+		Can: []string{"read the cluster", "read incidents", "merge and link incidents"}}
 	for _, m := range msgs {
 		out.Messages = append(out.Messages, toAPIMessage(m))
 	}
 	if run, ok, err := s.store.ActiveChatRun(ctx, id); err == nil && ok {
 		out.Active = map[string]any{"run_id": run.ID, "status": run.Status}
+	}
+	if th.IncidentID != nil && s.actions != nil {
+		out.Can = append(out.Can, "ask you to approve an action")
+		aps, err := s.store.IncidentApprovals(ctx, *th.IncidentID)
+		if err != nil {
+			slog.Error("loading approvals", "thread", id, "err", err)
+		}
+		for _, ap := range aps {
+			out.Approvals = append(out.Approvals, toAPIApproval(ap, s.now()))
+		}
 	}
 	if th.IncidentID != nil {
 		if p, err := s.store.PullRequestForIncident(ctx, *th.IncidentID); err == nil {

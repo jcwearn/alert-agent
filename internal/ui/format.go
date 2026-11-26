@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"sort"
 	"time"
+
+	"github.com/jcwearn/alert-agent/internal/store"
 )
 
 // ago renders a duration since t the way a human reads an incident list.
@@ -34,4 +36,15 @@ func sorted(m map[string]string) []kv {
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].K < out[j].K })
 	return out
+}
+
+// latestReport is the newest finished diagnosis among runs (newest first).
+// templ has no break, so the incident page asks for it here.
+func latestReport(runs []store.Run) (store.Run, bool) {
+	for _, r := range runs {
+		if r.Kind != store.KindChat && r.Status == store.RunSucceeded && r.Report != "" {
+			return r, true
+		}
+	}
+	return store.Run{}, false
 }

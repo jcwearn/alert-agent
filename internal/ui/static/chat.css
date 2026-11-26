@@ -176,3 +176,14 @@
 
 /* Room for the launcher at the end of a page. */
 main { padding-bottom: 88px; }
+
+/* Approval requests in an incident's conversation. */
+.cw-approval { border: 1px solid var(--line); border-radius: 8px; padding: 8px 10px; background: var(--card); }
+.cw-approval-pending { border-color: var(--fg); }
+.cw-approval-what { margin: 2px 0 4px; overflow-wrap: anywhere; }
+.cw-approval-what code, .cw-approval-result code { font: 12px/1.5 ui-monospace, monospace; }
+.cw-approval-result { margin-top: 4px; overflow-wrap: anywhere; }
+.cw-approval-buttons { display: flex; gap: 8px; margin-top: 8px; }
+.cw-approval-buttons form { margin: 0; }
+.cw-approval-buttons button { font: inherit; font-size: 13px; color: var(--fg); background: var(--card); border: 1px solid var(--line); border-radius: 6px; padding: 3px 10px; cursor: pointer; }
+.cw-approval-buttons button.cw-primary { background: var(--accent); color: var(--on-accent); border-color: var(--accent); font-weight: 600; }
