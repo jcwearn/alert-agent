@@ -85,6 +85,9 @@ for device in desktop phone; do
 		shot approval-rejected "$device" $scheme "/incidents/23"
 		shot chat-approval-pending "$device" $scheme "/incidents/27?chat=open&thread=7"
 		shot chat-approval-decided "$device" $scheme "/incidents/29?chat=open&thread=6"
+		# Opened after load, as a person opens it: the window starts hidden.
+		shot opened-new-general "$device" $scheme "/?chat=after&pending=general"
+		shot opened-incident "$device" $scheme "/incidents/27?chat=after"
 	done
 done
 # Phones are always full screen; on a desktop it is a toggle.

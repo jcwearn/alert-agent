@@ -3,8 +3,13 @@ package ui
 
 import (
 	"fmt"
+	"html"
 	"sort"
+	"strings"
 	"time"
+	"unicode"
+
+	"github.com/a-h/templ"
 
 	"github.com/jcwearn/alert-agent/internal/store"
 )
@@ -47,4 +52,30 @@ func latestReport(runs []store.Run) (store.Run, bool) {
 		}
 	}
 	return store.Run{}, false
+}
+
+// alertName may wrap between the words of a CamelCase name. Built here
+// because templ puts a space around a <wbr/> on its own line.
+func alertName(name string) templ.Component {
+	parts := camelParts(name)
+	for i, p := range parts {
+		parts[i] = html.EscapeString(p)
+	}
+	return templ.Raw(strings.Join(parts, "<wbr>"))
+}
+
+// camelParts splits an alert name where a capital follows a lower-case
+// letter or digit (KubePodCrashLooping → Kube Pod Crash Looping), so a
+// narrow table can wrap it between words.
+func camelParts(s string) []string {
+	var parts []string
+	start := 0
+	r := []rune(s)
+	for i := 1; i < len(r); i++ {
+		if unicode.IsUpper(r[i]) && (unicode.IsLower(r[i-1]) || unicode.IsDigit(r[i-1])) {
+			parts = append(parts, string(r[start:i]))
+			start = i
+		}
+	}
+	return append(parts, string(r[start:]))
 }

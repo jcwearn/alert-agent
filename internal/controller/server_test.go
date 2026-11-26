@@ -252,7 +252,7 @@ func TestIncidentPages(t *testing.T) {
 	s.now = func() time.Time { return opened.Add(90 * time.Minute) }
 
 	_, body := do(t, s.UIHandler(), http.MethodGet, "/", "")
-	for _, want := range []string{`href="/incidents/42"`, "KubePodCrashLooping", "1h ago", "Pod &lt;b&gt;a&lt;/b&gt;"} {
+	for _, want := range []string{`href="/incidents/42"`, "#42", "Kube<wbr>Pod<wbr>Crash<wbr>Looping", "1h ago", "Pod &lt;b&gt;a&lt;/b&gt;"} {
 		if !strings.Contains(body, want) {
 			t.Errorf("list page missing %q", want)
 		}

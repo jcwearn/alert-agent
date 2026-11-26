@@ -4,6 +4,8 @@
 //
 // Query parameters set the chat window's state, so every screenshot is one
 // URL: chat=open, full=1, thread=<id>, pending=general, menu=1, draft=<text>.
+// chat=after loads the page with the window closed and then opens it, the
+// way a person does (the window starts hidden).
 // paused=1 shows autonomous actions paused.
 package preview
 
@@ -101,6 +103,15 @@ func stateScript(r *http.Request) string {
 	}
 	b, _ := json.Marshal(state)
 	js := `try { sessionStorage.setItem("alert-agent.chat", ` + strconv.Quote(string(b)) + `); } catch (e) {}`
+	if q.Get("chat") == "after" {
+		js += `window.addEventListener("load", function () {
+			setTimeout(function () {
+				document.querySelector(".cw-launch").click();
+				// A screenshot does not wait for the opening animation.
+				document.getElementById("cw-panel").classList.remove("cw-anim");
+			}, 0);
+		});`
+	}
 	if q.Get("menu") == "1" {
 		js += `document.addEventListener("chat:render", function f() {
 			document.removeEventListener("chat:render", f);

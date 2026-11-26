@@ -20,7 +20,7 @@ templ IncidentList(incidents []IncidentRow, awaiting []store.PullRequest, approv
 						<tr>
 							<th>PR</th>
 							<th>CI</th>
-							<th class="hide-narrow">Incident</th>
+							<th>Incident</th>
 							<th>Opened</th>
 						</tr>
 					</thead>
@@ -34,11 +34,11 @@ templ IncidentList(incidents []IncidentRow, awaiting []store.PullRequest, approv
 								<td>
 									@statusBadge(pr.Checks)
 								</td>
-								<td class="hide-narrow">
-									<a href={ incidentURL(pr.IncidentID) }>#{ strconv.FormatInt(pr.IncidentID, 10) } { pr.AlertName }</a>
-									<div class="muted">{ pr.Namespace }</div>
+								<td>
+									<a href={ incidentURL(pr.IncidentID) }>{ idStr(pr.IncidentID) }<span class="hide-narrow">{ " " + pr.AlertName }</span></a>
+									<div class="muted hide-narrow">{ pr.Namespace }</div>
 								</td>
-								<td title={ stamp(pr.CreatedAt) }>{ ago(pr.CreatedAt, now) }</td>
+								<td class="when" title={ stamp(pr.CreatedAt) }>{ ago(pr.CreatedAt, now) }</td>
 							</tr>
 						}
 					</tbody>
@@ -67,7 +67,8 @@ templ IncidentList(incidents []IncidentRow, awaiting []store.PullRequest, approv
 									@statusBadge(in.Status)
 								</td>
 								<td>
-									<a href={ incidentURL(in.ID) }>{ in.AlertName }</a>
+									<span class="num">{ idStr(in.ID) }</span>
+									<a href={ incidentURL(in.ID) }>@alertName(in.AlertName)</a>
 									if in.AlertCount > 1 {
 										<span class="muted">× { strconv.Itoa(in.AlertCount) }</span>
 									}
@@ -81,7 +82,7 @@ templ IncidentList(incidents []IncidentRow, awaiting []store.PullRequest, approv
 								</td>
 								<td class="hide-narrow">{ in.Namespace }</td>
 								<td class="hide-narrow">{ in.Severity }</td>
-								<td title={ stamp(in.OpenedAt) }>{ ago(in.OpenedAt, now) }</td>
+								<td class="when" title={ stamp(in.OpenedAt) }>{ ago(in.OpenedAt, now) }</td>
 							</tr>
 							for _, c := range in.Children {
 								<tr class="child">
@@ -90,12 +91,13 @@ templ IncidentList(incidents []IncidentRow, awaiting []store.PullRequest, approv
 									</td>
 									<td>
 										<span class="muted">↳ merged</span>
-										<a href={ incidentURL(c.ID) }>{ c.AlertName }</a>
+										<span class="num">{ idStr(c.ID) }</span>
+										<a href={ incidentURL(c.ID) }>@alertName(c.AlertName)</a>
 										@linkChips(c.Links)
 									</td>
 									<td class="hide-narrow">{ c.Namespace }</td>
 									<td class="hide-narrow">{ c.Severity }</td>
-									<td title={ stamp(c.OpenedAt) }>{ ago(c.OpenedAt, now) }</td>
+									<td class="when" title={ stamp(c.OpenedAt) }>{ ago(c.OpenedAt, now) }</td>
 								</tr>
 							}
 						}
