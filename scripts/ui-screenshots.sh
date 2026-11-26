@@ -28,15 +28,18 @@ for _ in $(seq 50); do
 done
 mkdir -p "$out"
 
-# shot NAME DEVICE SCHEME PATH
+# shot NAME DEVICE SCHEME PATH [HEIGHT]
+# HEIGHT makes the page that tall, to show what is below the fold (headless
+# Chrome screenshots before it scrolls to a #fragment).
 shot() {
-	local name=$1 device=$2 scheme=$3 path=$4 size scale pref url
+	local name=$1 device=$2 scheme=$3 path=$4 height=${5:-} size scale pref url
 	url="http://127.0.0.1:$port$path"
 	case $device in
-		desktop) size=1440,900 scale=1 ;;
+		desktop) size=1440,${height:-900} scale=1 ;;
 		# Desktop Chrome will not lay a window out narrower than ~500px:
 		# the preview frames the page at a phone's size instead.
-		phone) size=390,844 scale=2 url="http://127.0.0.1:$port/__phone?src=$(printf %s "$path" | jq -sRr @uri)" ;;
+		phone) size=390,${height:-844} scale=2
+			url="http://127.0.0.1:$port/__phone?h=${height:-844}&src=$(printf %s "$path" | jq -sRr @uri)" ;;
 	esac
 	case $scheme in
 		light) pref=1 ;;
@@ -70,6 +73,19 @@ for device in desktop phone; do
 	shot streaming "$device" dark "/?chat=open&thread=4"
 	shot new-general "$device" dark "/?chat=open&pending=general"
 	shot read-only-capped "$device" dark "/incidents/24?chat=open&thread=5"
+	# Phase 5: approvals, actions and the pause switch, light and dark.
+	for scheme in light dark; do
+		shot home-paused "$device" $scheme "/?paused=1"
+		shot approval-pending "$device" $scheme "/incidents/27"
+		shot approval-decided "$device" $scheme "/incidents/29"
+		shot autonomous-action "$device" $scheme "/incidents/28"
+		shot activity-autonomous "$device" $scheme "/incidents/28" 2600
+		shot activity-escalated "$device" $scheme "/incidents/29" 3000
+		shot approval-expired "$device" $scheme "/incidents/24"
+		shot approval-rejected "$device" $scheme "/incidents/23"
+		shot chat-approval-pending "$device" $scheme "/incidents/27?chat=open&thread=7"
+		shot chat-approval-decided "$device" $scheme "/incidents/29?chat=open&thread=6"
+	done
 done
 # Phones are always full screen; on a desktop it is a toggle.
 shot fullscreen desktop light "/incidents/25?chat=open&full=1&thread=1"

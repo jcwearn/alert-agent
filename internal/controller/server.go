@@ -279,7 +279,13 @@ func (s *Server) incidentList(w http.ResponseWriter, r *http.Request) {
 			slog.Error("listing open PRs", "err", err)
 		}
 	}
-	render(w, r, ui.IncidentList(ui.GroupIncidents(incidents), awaiting, s.now()))
+	var approvals []store.Approval
+	if s.actions != nil {
+		if approvals, err = s.store.PendingApprovals(r.Context()); err != nil {
+			slog.Error("listing approvals", "err", err)
+		}
+	}
+	s.render(w, r, ui.IncidentList(ui.GroupIncidents(incidents), awaiting, approvals, s.now()))
 }
 
 func (s *Server) incidentDetail(w http.ResponseWriter, r *http.Request) {
@@ -301,7 +307,7 @@ func (s *Server) incidentDetail(w http.ResponseWriter, r *http.Request) {
 	}
 	page := ui.IncidentPage{
 		Incident: in, Alerts: alerts,
-		Notice: r.URL.Query().Get("msg"), Problem: r.URL.Query().Get("error"),
+		Notice: r.URL.Query().Get("msg"), Problem: r.URL.Query().Get("error"), Now: s.now(),
 	}
 	if page.Runs, err = s.store.ListRuns(ctx, id); err != nil {
 		slog.Error("loading runs", "incident", id, "err", err)
@@ -328,12 +334,17 @@ func (s *Server) incidentDetail(w http.ResponseWriter, r *http.Request) {
 	if page.Actions, err = s.store.IncidentActions(ctx, id); err != nil {
 		slog.Error("loading audit trail", "incident", id, "err", err)
 	}
+	if s.actions != nil {
+		if page.Approvals, err = s.store.IncidentApprovals(ctx, id); err != nil {
+			slog.Error("loading approvals", "incident", id, "err", err)
+		}
+	}
 	if recent, err := s.store.ListIncidents(ctx, 200); err == nil {
 		page.Candidates = ui.MergeCandidates(in, recent, s.now())
 	} else {
 		slog.Error("loading merge candidates", "incident", id, "err", err)
 	}
-	render(w, r, ui.IncidentDetail(page))
+	s.render(w, r, ui.IncidentDetail(page))
 }
 
 func (s *Server) runDetail(w http.ResponseWriter, r *http.Request) {
@@ -371,12 +382,24 @@ func (s *Server) runDetail(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		slog.Error("loading run incidents", "id", id, "err", err)
 	}
-	render(w, r, ui.RunDetail(in, run, covers, ui.Transcript(events)))
+	s.render(w, r, ui.RunDetail(in, run, covers, ui.Transcript(events)))
 }
 
-func render(w http.ResponseWriter, r *http.Request, c templ.Component) {
+// render writes a page. With actions on, every page learns the pause
+// switch's state, so the layout can show it.
+func (s *Server) render(w http.ResponseWriter, r *http.Request, c templ.Component) {
+	ctx := r.Context()
+	if s.actions != nil {
+		st := ui.ActionState{Enabled: true, Path: r.URL.Path}
+		if p, err := s.store.ActionsPause(ctx); err != nil {
+			slog.Error("reading the pause switch", "err", err)
+		} else {
+			st.Paused, st.At = p.Paused, p.At
+		}
+		ctx = ui.WithActionState(ctx, st)
+	}
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	if err := c.Render(r.Context(), w); err != nil {
+	if err := c.Render(ctx, w); err != nil {
 		slog.Error("render", "path", r.URL.Path, "err", err)
 	}
 }

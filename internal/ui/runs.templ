@@ -65,14 +65,11 @@ templ runList(runs []store.Run) {
 				</tbody>
 			</table>
 		</div>
-		for _, r := range runs {
-			if r.Kind != store.KindChat && r.Status == store.RunSucceeded && r.Report != "" {
-				<h2>Latest report</h2>
-				<div class="card report md">
-					@markdown(r.Report)
-				</div>
-				break
-			}
+		if r, ok := latestReport(runs); ok {
+			<h2>Latest report</h2>
+			<div class="card report md">
+				@markdown(r.Report)
+			</div>
 		}
 	}
 }

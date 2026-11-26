@@ -8,8 +8,10 @@ import (
 )
 
 // IncidentList is the home page.
-templ IncidentList(incidents []IncidentRow, awaiting []store.PullRequest, now time.Time) {
+templ IncidentList(incidents []IncidentRow, awaiting []store.PullRequest, approvals []store.Approval, now time.Time) {
 	@layout("Incidents") {
+		@actionsSwitch()
+		@approvalList(approvals, now)
 		if len(awaiting) > 0 {
 			<h1>Awaiting review ({ strconv.Itoa(len(awaiting)) })</h1>
 			<div class="table-wrap">
@@ -201,6 +203,7 @@ templ IncidentDetail(p IncidentPage) {
 				</dl>
 			</div>
 		}
+		@approvalSection(p.Approvals, p.Now)
 		@related(p)
 		@runList(p.Runs)
 		<h2>Alerts ({ strconv.Itoa(len(p.Alerts)) })</h2>
@@ -313,12 +316,23 @@ templ activity(actions []store.Action) {
 							<td>{ stamp(a.CreatedAt) }</td>
 							<td>
 								<span class="mono">{ a.Tool }</span>
+								if a.Mode != "" {
+									<span class="chip kind">{ modeLabel(a.Mode) }</span>
+								}
 								<span class="muted">
 									{ idStr(a.IncidentID) }
 									if a.TargetIncidentID != nil {
 										→ { idStr(*a.TargetIncidentID) }
 									}
 								</span>
+								if a.Object != "" {
+									<div class="mono muted action-object">
+										{ a.Object }
+										if a.Target != "" && a.Target != a.Object {
+											({ a.Target })
+										}
+									</div>
+								}
 								if s := actionSummary(a); s != "" {
 									<div class="muted">{ s }</div>
 								}

@@ -28,6 +28,7 @@ type fixtures struct {
 	threads   []store.Thread
 	messages  []store.ChatMessage
 	actions   []store.Action
+	approvals []store.Approval
 	links     map[int64][]store.Link
 	// scripted turns: steps revealed over time, then a reply.
 	turns map[int64]*turn
@@ -203,6 +204,7 @@ func newFixtures() *fixtures {
 		{ID: 3, Actor: "run:33", RunID: ptr(int64(33)), IncidentID: 25, Tool: "update_pr",
 			Status: store.ActionSucceeded, Result: "Pushed 3f9c2ab", CreatedAt: ago(28 * time.Minute)},
 	}
+	f.addActions(now)
 	return f
 }
 

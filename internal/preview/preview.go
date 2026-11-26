@@ -4,10 +4,12 @@
 //
 // Query parameters set the chat window's state, so every screenshot is one
 // URL: chat=open, full=1, thread=<id>, pending=general, menu=1, draft=<text>.
+// paused=1 shows autonomous actions paused.
 package preview
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"html"
@@ -25,8 +27,10 @@ func Handler() http.Handler {
 	// Turns the "awaiting review" list and PR abilities on; nothing here
 	// ever reaches GitHub, since no runner calls the tools.
 	s.EnablePRs(&controller.PRs{Repo: "example/homelab"}, nil)
+	// Turns the approvals and the pause switch on; approving runs nothing.
+	s.EnableActions(&controller.Actions{Actor: previewActor{}, Autonomous: map[string]bool{"books": true, "photos": true}})
 	mux := http.NewServeMux()
-	mux.Handle("/", withChatState(s.UIHandler()))
+	mux.Handle("/", withPaused(withChatState(s.UIHandler())))
 	mux.HandleFunc("GET /__phone", phoneFrame)
 	return mux
 }
@@ -40,10 +44,26 @@ func phoneFrame(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "src must be a path on this server", http.StatusBadRequest)
 		return
 	}
+	// h makes the frame taller, to capture a whole page.
+	h, err := strconv.Atoi(r.URL.Query().Get("h"))
+	if err != nil || h < 400 || h > 8000 {
+		h = 844
+	}
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	_, _ = fmt.Fprintf(w, `<!DOCTYPE html><html><head><meta charset="utf-8"><title>phone</title>
-<style>html,body{margin:0;background:#888}iframe{display:block;border:0;width:390px;height:844px}</style></head>
-<body><iframe src="%s"></iframe></body></html>`, html.EscapeString(src))
+<style>html,body{margin:0;background:#888}iframe{display:block;border:0;width:390px;height:%dpx}</style></head>
+<body><iframe src="%s"></iframe></body></html>`, h, html.EscapeString(src))
+}
+
+// withPaused shows the pages with autonomous actions paused when the URL
+// says paused=1.
+func withPaused(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Query().Get("paused") == "1" {
+			r = r.WithContext(context.WithValue(r.Context(), pausedKey{}, true))
+		}
+		next.ServeHTTP(w, r)
+	})
 }
 
 // withChatState puts the chat window in the state the query asks for,
