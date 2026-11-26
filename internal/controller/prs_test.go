@@ -506,7 +506,7 @@ func TestRunnerSession(t *testing.T) {
 func TestSlackMessageLinksPR(t *testing.T) {
 	pr := &store.PullRequest{Number: 1200, URL: "https://github.com/o/r/pull/1200", Title: "fix(x): <y>"}
 	msg := slackMessage("https://ui.example", store.Incident{ID: 1, AlertName: "X"},
-		store.Run{ID: 1, Status: store.RunSucceeded, Report: "## Summary\nok"}, pr)
+		store.Run{ID: 1, Status: store.RunSucceeded, Report: "## Summary\nok"}, pr, nil)
 	b, _ := json.Marshal(msg)
 	if !strings.Contains(string(b), "pull/1200|PR #1200") || strings.Contains(string(b), "<y>") {
 		t.Errorf("slack message: %s", b)

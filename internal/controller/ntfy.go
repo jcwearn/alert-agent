@@ -71,10 +71,38 @@ func reviewMessage(topic string, pr store.PullRequest, incidentURL string) ntfyM
 	return m
 }
 
+func approvalMessage(topic string, ap store.Approval, in store.Incident, incidentURL string) ntfyMessage {
+	where := in.AlertName
+	if in.Namespace != "" {
+		where += " in " + in.Namespace
+	}
+	m := ntfyMessage{
+		Topic:    topic,
+		Title:    fmt.Sprintf("Approve? %s on %s", ap.Tool, ap.Object),
+		Message:  fmt.Sprintf("%s\nIncident #%d (%s). Expires at %s.", ap.Reason, in.ID, where, ap.ExpiresAt.Local().Format("15:04 MST")),
+		Tags:     []string{"raising_hand"},
+		Priority: 4,
+	}
+	if incidentURL != "" && !strings.HasPrefix(incidentURL, "/") {
+		m.Click = incidentURL
+		m.Actions = []ntfyAction{{Action: "view", Label: "Approve or reject", URL: incidentURL}}
+	}
+	return m
+}
+
+// ApprovalRequested publishes "approve?" for an action waiting on a human.
+func (n *NtfyReviewer) ApprovalRequested(ctx context.Context, ap store.Approval, in store.Incident, incidentURL string) error {
+	return n.publish(ctx, approvalMessage(n.Topic, ap, in, incidentURL))
+}
+
 // NeedsReview publishes one message, using ntfy's JSON publishing (POST to
 // the server root), which carries UTF-8 titles without header encoding.
 func (n *NtfyReviewer) NeedsReview(ctx context.Context, pr store.PullRequest, incidentURL string) error {
-	body, err := json.Marshal(reviewMessage(n.Topic, pr, incidentURL))
+	return n.publish(ctx, reviewMessage(n.Topic, pr, incidentURL))
+}
+
+func (n *NtfyReviewer) publish(ctx context.Context, msg ntfyMessage) error {
+	body, err := json.Marshal(msg)
 	if err != nil {
 		return err
 	}

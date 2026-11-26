@@ -78,6 +78,17 @@ type Store interface {
 	CreateGeneralThread(ctx context.Context) (store.Thread, error)
 	RecentThreads(ctx context.Context, limit int) ([]store.Thread, error)
 	HasStoredSession(ctx context.Context, sessionID string, beforeRunID int64) (bool, error)
+
+	StartClusterAction(ctx context.Context, a store.ClusterAction, g store.Guardrails) (int64, string, error)
+	PriorClusterActions(ctx context.Context, namespace, alertname string, since time.Time) ([]store.PriorAction, error)
+	RequestApproval(ctx context.Context, p store.Approval) (int64, []int64, error)
+	DecideApproval(ctx context.Context, id int64, approve bool, by string) (store.Approval, error)
+	SetApprovalAction(ctx context.Context, id, actionID int64) error
+	ExpireApprovals(ctx context.Context) ([]store.Approval, error)
+	PendingApprovals(ctx context.Context) ([]store.Approval, error)
+	IncidentApprovals(ctx context.Context, incidentID int64) ([]store.Approval, error)
+	ActionsPause(ctx context.Context) (store.Pause, error)
+	SetActionsPaused(ctx context.Context, paused bool, by string) (bool, error)
 }
 
 // Options configure the agent side of the controller.
@@ -121,6 +132,7 @@ type Server struct {
 	prs      *PRs
 	reviewer Reviewer
 	comments *Comments
+	actions  *Actions
 }
 
 // New returns a Server backed by st. waker and notifier may be nil.
@@ -154,6 +166,10 @@ func (s *Server) UIHandler() http.Handler {
 	mux.HandleFunc("POST /incidents/{id}/unmerge", s.uiUnmerge)
 	mux.HandleFunc("POST /incidents/{id}/link", s.uiLink)
 	mux.HandleFunc("POST /incidents/{id}/unlink", s.uiUnlink)
+	mux.HandleFunc("POST /approvals/{id}/approve", s.uiApprove)
+	mux.HandleFunc("POST /approvals/{id}/reject", s.uiReject)
+	mux.HandleFunc("POST /actions/pause", s.uiPause)
+	mux.HandleFunc("POST /actions/resume", s.uiResume)
 	mux.HandleFunc("GET /runs/{id}/stream", s.runStream)
 	mux.Handle("GET /static/", ui.StaticHandler())
 	mux.HandleFunc("GET /api/chat/threads", s.apiThreads)
@@ -374,6 +390,9 @@ func (s *Server) Run(ctx context.Context, uiAddr, webhookAddr, runnerAddr string
 		{Addr: runnerAddr, Handler: s.RunnerHandler(), ReadHeaderTimeout: 10 * time.Second},
 	}
 
+	if s.actions != nil {
+		go s.expireApprovals(ctx)
+	}
 	if s.prs != nil {
 		go s.pollPRs(ctx)
 		if s.comments != nil {

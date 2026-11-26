@@ -11,6 +11,7 @@ import (
 	"strings"
 	"unicode/utf8"
 
+	"github.com/jcwearn/alert-agent/internal/actions"
 	"github.com/jcwearn/alert-agent/internal/dispatch"
 	"github.com/jcwearn/alert-agent/internal/runnerapi"
 	"github.com/jcwearn/alert-agent/internal/store"
@@ -126,6 +127,11 @@ func (s *Server) buildContext(ctx context.Context, run store.Run) (runnerapi.Con
 		})
 	}
 
+	if s.actions != nil {
+		if err := s.addActionContext(ctx, &rc, in); err != nil {
+			return rc, err
+		}
+	}
 	if s.prs != nil {
 		open, err := s.store.OpenPullRequests(ctx)
 		if err != nil {
@@ -297,7 +303,7 @@ func (s *Server) RunFinished(runID int64) {
 			if p, err := s.store.PullRequestForIncident(ctx, run.IncidentID); err == nil && p.RunID == run.ID {
 				pr = &p
 			}
-			go s.notifier.RunFinished(context.Background(), in, run, pr)
+			go s.notifier.RunFinished(context.Background(), in, run, pr, s.runActionLines(ctx, run))
 		}
 	}
 	// Only after a run that did its job: a failed run (a usage limit, say)
@@ -322,4 +328,33 @@ func writeJSON(w http.ResponseWriter, v any) {
 	if err := json.NewEncoder(w).Encode(v); err != nil {
 		slog.Error("encode response", "err", err)
 	}
+}
+
+// runActionLines describes the cluster actions and approval requests a run
+// made, from the audit trail, for its notification. They are the
+// controller's record, not the agent's account of it.
+func (s *Server) runActionLines(ctx context.Context, run store.Run) []string {
+	if s.actions == nil {
+		return nil
+	}
+	acts, err := s.store.IncidentActions(ctx, run.IncidentID)
+	if err != nil {
+		slog.Error("loading run actions", "run", run.ID, "err", err)
+		return nil
+	}
+	var lines []string
+	for _, a := range acts {
+		if a.RunID == nil || *a.RunID != run.ID {
+			continue
+		}
+		switch {
+		case a.Tool == "request_approval" && a.Status == store.ActionSucceeded:
+			lines = append(lines, "Asked for approval: "+firstLine(a.Result))
+		case actions.IsTool(a.Tool) && a.Status == store.ActionSucceeded:
+			lines = append(lines, "Took "+a.Tool+": "+firstLine(a.Result))
+		case actions.IsTool(a.Tool):
+			lines = append(lines, a.Tool+" "+a.Status+": "+clipRunes(firstLine(a.Result), 300))
+		}
+	}
+	return lines
 }

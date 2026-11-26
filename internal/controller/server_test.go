@@ -35,6 +35,7 @@ type fakeStore struct {
 
 	prState   *prState
 	chatState *chatState
+	actState  *actState
 }
 
 func (f *fakeStore) EnqueueRun(_ context.Context, incidentID int64, hold time.Duration) (runID int64, batched bool, err error) {

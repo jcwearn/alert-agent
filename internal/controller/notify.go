@@ -17,8 +17,9 @@ import (
 
 // Notifier tells a human how a run went.
 type Notifier interface {
-	// pr is the PR this run opened, if any.
-	RunFinished(ctx context.Context, in store.Incident, run store.Run, pr *store.PullRequest)
+	// pr is the PR this run opened, if any; acts are lines describing the
+	// cluster actions and approval requests it made, from the audit trail.
+	RunFinished(ctx context.Context, in store.Incident, run store.Run, pr *store.PullRequest, acts []string)
 }
 
 // SlackNotifier posts run results to a Slack incoming webhook, and the
@@ -33,8 +34,8 @@ type SlackNotifier struct {
 
 // RunFinished posts one message. Failures are logged, not retried: the run
 // and its report are already safe in the database.
-func (n *SlackNotifier) RunFinished(ctx context.Context, in store.Incident, run store.Run, pr *store.PullRequest) {
-	if err := n.post(ctx, slackMessage(n.PublicURL, in, run, pr)); err != nil {
+func (n *SlackNotifier) RunFinished(ctx context.Context, in store.Incident, run store.Run, pr *store.PullRequest, acts []string) {
+	if err := n.post(ctx, slackMessage(n.PublicURL, in, run, pr, acts)); err != nil {
 		slog.Error("slack notify", "run", run.ID, "err", err)
 	}
 }
@@ -138,7 +139,7 @@ const sectionLimit = 3000
 // cause and asides stay on the run page, one click away.
 var notifySections = []string{"Summary", "Recommended fix", "Confidence"}
 
-func slackMessage(publicURL string, in store.Incident, run store.Run, pr *store.PullRequest) slackPayload {
+func slackMessage(publicURL string, in store.Incident, run store.Run, pr *store.PullRequest, acts []string) slackPayload {
 	runURL := fmt.Sprintf("%s/runs/%d", strings.TrimRight(publicURL, "/"), run.ID)
 	where := in.AlertName
 	if in.Namespace != "" {
@@ -174,6 +175,9 @@ func slackMessage(publicURL string, in store.Incident, run store.Run, pr *store.
 	if pr != nil {
 		blocks = append(blocks, mrkdwnSection(fmt.Sprintf(":wrench: *Proposed fix:* <%s|PR #%d> %s",
 			pr.URL, pr.Number, slackEscape(pr.Title))))
+	}
+	if len(acts) > 0 {
+		blocks = append(blocks, mrkdwnSection(":robot_face: *Actions*\n• "+slackEscape(strings.Join(acts, "\n• "))))
 	}
 	blocks = append(blocks, slackBlock{Type: "context", Elements: []*slackText{
 		{Type: "mrkdwn", Text: fmt.Sprintf("<%s|Full report and transcript>", runURL)},
@@ -255,4 +259,27 @@ func clipRunes(s string, n int) string {
 		return s
 	}
 	return string(r[:n-1]) + "…"
+}
+
+// ApprovalRequested posts "approval needed", alongside the ntfy push.
+func (n *SlackNotifier) ApprovalRequested(ctx context.Context, ap store.Approval, in store.Incident, incidentURL string) error {
+	return n.post(ctx, slackApprovalMessage(ap, in, incidentURL))
+}
+
+func slackApprovalMessage(ap store.Approval, in store.Incident, incidentURL string) slackPayload {
+	where := in.AlertName
+	if in.Namespace != "" {
+		where += " in " + in.Namespace
+	}
+	incident := fmt.Sprintf("incident #%d", in.ID)
+	if strings.HasPrefix(incidentURL, "http") {
+		incident = fmt.Sprintf("<%s|%s>", incidentURL, incident)
+	}
+	return slackPayload{
+		Text: fmt.Sprintf("Approval needed: %s on %s", ap.Tool, ap.Object),
+		Blocks: []slackBlock{mrkdwnSection(fmt.Sprintf(
+			":raising_hand: *Approval needed* for %s (%s)\n*%s* on %#q\n%s\nApprove or reject on the incident page; it expires at %s.",
+			incident, slackEscape(where), ap.Tool, slackEscape(ap.Object), toMrkdwn(ap.Reason),
+			ap.ExpiresAt.Local().Format("15:04 MST")))},
+	}
 }
