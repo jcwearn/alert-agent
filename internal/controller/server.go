@@ -172,6 +172,7 @@ func (s *Server) UIHandler() http.Handler {
 	mux.HandleFunc("POST /actions/resume", s.uiResume)
 	mux.HandleFunc("GET /runs/{id}/stream", s.runStream)
 	mux.Handle("GET /static/", ui.StaticHandler())
+	mux.Handle("GET /favicon.ico", ui.FaviconHandler())
 	mux.HandleFunc("GET /api/chat/threads", s.apiThreads)
 	mux.HandleFunc("POST /api/chat/threads", s.apiCreateThread)
 	mux.HandleFunc("GET /api/chat/threads/{id}", s.apiThread)
