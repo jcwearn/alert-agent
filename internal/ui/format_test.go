@@ -1,6 +1,8 @@
 package ui
 
 import (
+	"context"
+	"strings"
 	"testing"
 
 	"github.com/jcwearn/alert-agent/internal/store"
@@ -18,5 +20,29 @@ func TestLatestReport(t *testing.T) {
 	}
 	if _, ok := latestReport(runs[:2]); ok {
 		t.Error("found a report where there is none")
+	}
+}
+
+func TestCamelParts(t *testing.T) {
+	for in, want := range map[string]string{
+		"KubePodCrashLooping":    "Kube|Pod|Crash|Looping",
+		"KubeContainerOOMKilled": "Kube|Container|OOMKilled",
+		"Watchdog":               "Watchdog",
+		"":                       "",
+		"Http5xxRate":            "Http5xx|Rate",
+	} {
+		if got := strings.Join(camelParts(in), "|"); got != want {
+			t.Errorf("camelParts(%q) = %q, want %q", in, got, want)
+		}
+	}
+}
+
+func TestAlertNameEscapes(t *testing.T) {
+	var b strings.Builder
+	if err := alertName("kubeBad<script>").Render(context.Background(), &b); err != nil {
+		t.Fatal(err)
+	}
+	if got, want := b.String(), "kube<wbr>Bad&lt;script&gt;"; got != want {
+		t.Errorf("got %q, want %q", got, want)
 	}
 }

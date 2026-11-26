@@ -179,6 +179,7 @@
 		}
 		dot.hidden = !(busy() || unread) || st.open;
 		launcher.classList.toggle("cw-busy", busy());
+		autosize();
 	}
 
 	function busy() { return !!(view && view.active); }
@@ -595,7 +596,10 @@
 	}
 	function hideNotice() { notice.hidden = true; }
 
+	// A hidden panel has no layout: scrollHeight is 0 there, which would pin
+	// the field at 2px until the next keystroke. layout() sizes it on open.
 	function autosize() {
+		if (panel.hidden) { return; }
 		ta.style.height = "auto";
 		var cs = getComputedStyle(ta);
 		var max = parseFloat(cs.lineHeight) * 8 + parseFloat(cs.paddingTop) + parseFloat(cs.paddingBottom);
@@ -622,7 +626,6 @@
 	// ---- start ----
 
 	layout();
-	autosize();
 	if (st.open) {
 		loadList().then(choose);
 	} else if (st.thread) {
