@@ -173,6 +173,10 @@ func claudeArgs(rc runnerapi.Context, settings, mcpConfigFile, prompt string) []
 		"--settings", settings,
 		"--mcp-config", mcpConfigFile,
 		"--strict-mcp-config",
+		// Defense in depth under the allow rules: no code-running tools
+		// unless named, file tools confined to the working directory, and no
+		// project or user settings from the checkout (only --settings).
+		"--restricted",
 	}, session...)
 	if rc.Model != "" {
 		args = append(args, "--model", rc.Model)

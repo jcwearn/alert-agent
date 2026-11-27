@@ -39,6 +39,44 @@ type fakeStore struct {
 	prState   *prState
 	chatState *chatState
 	actState  *actState
+
+	block    *store.ClaudeBlock
+	deferred map[int64]time.Time // failed run -> the successor's hold
+	queued   map[string]int
+}
+
+func (f *fakeStore) DeferRun(_ context.Context, runID int64, until time.Time) (next int64, deferred bool, err error) {
+	if r, ok := f.runs[runID]; !ok || r.Kind == store.KindChat {
+		return 0, false, nil
+	}
+	if f.deferred == nil {
+		f.deferred = map[int64]time.Time{}
+	}
+	f.deferred[runID] = until
+	return runID + 1000, true, nil
+}
+
+func (f *fakeStore) QueueDepth(context.Context) (map[string]int, time.Duration, error) {
+	return f.queued, 0, nil
+}
+
+func (f *fakeStore) GetClaudeBlock(context.Context) (store.ClaudeBlock, bool, error) {
+	if f.block == nil {
+		return store.ClaudeBlock{}, false, nil
+	}
+	return *f.block, true, nil
+}
+
+func (f *fakeStore) SetClaudeBlock(_ context.Context, reason string, until time.Time) (bool, error) {
+	started := f.block == nil || f.block.Reason != reason
+	f.block = &store.ClaudeBlock{Reason: reason, Until: until}
+	return started, nil
+}
+
+func (f *fakeStore) ClearClaudeBlock(context.Context) (bool, error) {
+	had := f.block != nil
+	f.block = nil
+	return had, nil
 }
 
 func (f *fakeStore) EnqueueRun(_ context.Context, incidentID int64, hold time.Duration) (runID int64, batched bool, err error) {
@@ -75,7 +113,7 @@ func (f *fakeStore) FinishRun(_ context.Context, runID int64, res store.RunResul
 		f.finished = map[int64]store.RunResult{}
 	}
 	f.finished[runID] = res
-	r.Status, r.Report, r.Error = res.Status, res.Report, res.Error
+	r.Status, r.Report, r.Error, r.FailureReason = res.Status, res.Report, res.Error, res.Reason
 	f.runs[runID] = r
 	return true, nil
 }

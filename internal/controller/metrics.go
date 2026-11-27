@@ -19,6 +19,7 @@ type metrics struct {
 	comments       *prometheus.CounterVec
 	actions        *prometheus.CounterVec
 	approvals      *prometheus.CounterVec
+	failures       *prometheus.CounterVec
 }
 
 func newMetrics() *metrics {
@@ -56,6 +57,10 @@ func newMetrics() *metrics {
 			Name: "alert_agent_approvals_total",
 			Help: "Approval requests, by event: requested, approved, rejected, expired, superseded.",
 		}, []string{"event"}),
+		failures: prometheus.NewCounterVec(prometheus.CounterOpts{
+			Name: "alert_agent_run_failures_total",
+			Help: "Failed runs, by reason: auth (the Claude token was refused) and usage_limit defer the run; other is everything else.",
+		}, []string{"reason"}),
 	}
 	// Pre-create every series so a rate() over them works from the first
 	// scrape rather than from the first occurrence.
@@ -92,8 +97,11 @@ func newMetrics() *metrics {
 	for _, e := range []string{"requested", "approved", "rejected", "expired", "superseded"} {
 		m.approvals.WithLabelValues(e)
 	}
+	for _, r := range []string{store.FailureAuth, store.FailureUsageLimit, "other"} {
+		m.failures.WithLabelValues(r)
+	}
 	m.registry.MustRegister(
-		m.webhooks, m.incidents, m.runs, m.prs, m.consolidations, m.comments, m.actions, m.approvals,
+		m.webhooks, m.incidents, m.runs, m.prs, m.consolidations, m.comments, m.actions, m.approvals, m.failures,
 		collectors.NewGoCollector(),
 		collectors.NewProcessCollector(collectors.ProcessCollectorOpts{}),
 	)

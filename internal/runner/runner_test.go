@@ -214,7 +214,7 @@ func TestRunSucceeds(t *testing.T) {
 	}
 
 	args := read(t, dir, "claude.args")
-	for _, want := range []string{"--session-id\n11111111-2222-3333-4444-555555555555", "--permission-mode\ndontAsk", "--model\nopus", "--max-turns\n30", "--output-format\nstream-json", "--strict-mcp-config"} {
+	for _, want := range []string{"--session-id\n11111111-2222-3333-4444-555555555555", "--permission-mode\ndontAsk", "--model\nopus", "--max-turns\n30", "--output-format\nstream-json", "--strict-mcp-config", "--restricted"} {
 		if !strings.Contains(args, want) {
 			t.Errorf("claude args lack %q", strings.ReplaceAll(want, "\n", " "))
 		}
@@ -697,6 +697,47 @@ func TestActionPrompts(t *testing.T) {
 	for _, want := range []string{"PAUSED", "without approval: drill, ebooks", "#9 delete_pod (autonomous) on Deployment drill/lock-keeper for incident #1", "escalate, do not retry"} {
 		if !strings.Contains(p, want) {
 			t.Errorf("user prompt lacks %q:\n%s", want, p)
+		}
+	}
+}
+
+// testdata/auth-failure.jsonl is claude 2.1.332's stream with an invalid
+// OAuth token (hooks and init trimmed, ids zeroed).
+func TestRunClassifiesAuthFailure(t *testing.T) {
+	fixture, err := filepath.Abs("testdata/auth-failure.jsonl")
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg, fc, _ := setup(t, `cat "`+fixture+`"; exit 1`+"\n")
+	if err := Run(t.Context(), cfg); err != nil {
+		t.Fatalf("reported failure should exit cleanly, got %v", err)
+	}
+	if fc.finish == nil || fc.finish.Status != "failed" || fc.finish.Reason != runnerapi.ReasonAuth {
+		t.Fatalf("finish = %+v", fc.finish)
+	}
+	if !strings.Contains(fc.finish.Error, "OAuth access token is invalid") {
+		t.Errorf("error should carry claude's message: %q", fc.finish.Error)
+	}
+}
+
+func TestFailureReason(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		r    resultEvent
+		want string
+	}{
+		{"assistant auth error", resultEvent{apiError: "authentication_failed"}, runnerapi.ReasonAuth},
+		{"billing", resultEvent{apiError: "billing_error"}, runnerapi.ReasonAuth},
+		{"assistant rate limit", resultEvent{apiError: "rate_limit"}, runnerapi.ReasonUsageLimit},
+		{"401 only", resultEvent{APIErrorStatus: 401}, runnerapi.ReasonAuth},
+		{"429 only", resultEvent{APIErrorStatus: 429}, runnerapi.ReasonUsageLimit},
+		{"text only", resultEvent{Result: "You've hit your limit · resets 3pm"}, runnerapi.ReasonUsageLimit},
+		{"older text", resultEvent{Result: "Claude AI usage limit reached|1764200000"}, runnerapi.ReasonUsageLimit},
+		{"server error", resultEvent{apiError: "server_error", APIErrorStatus: 500}, ""},
+		{"max turns", resultEvent{Subtype: "error_max_turns"}, ""},
+	} {
+		if got := failureReason(&tc.r); got != tc.want {
+			t.Errorf("%s: got %q, want %q", tc.name, got, tc.want)
 		}
 	}
 }

@@ -91,6 +91,12 @@ type Store interface {
 	IncidentApprovals(ctx context.Context, incidentID int64) ([]store.Approval, error)
 	ActionsPause(ctx context.Context) (store.Pause, error)
 	SetActionsPaused(ctx context.Context, paused bool, by string) (bool, error)
+
+	DeferRun(ctx context.Context, runID int64, until time.Time) (int64, bool, error)
+	QueueDepth(ctx context.Context) (map[string]int, time.Duration, error)
+	GetClaudeBlock(ctx context.Context) (store.ClaudeBlock, bool, error)
+	SetClaudeBlock(ctx context.Context, reason string, until time.Time) (bool, error)
+	ClearClaudeBlock(ctx context.Context) (bool, error)
 }
 
 // Options configure the agent side of the controller.
@@ -117,6 +123,8 @@ type Options struct {
 	// ListPageSize is how many incident families the home page shows; 0 is
 	// the default (50).
 	ListPageSize int
+	// RunbookURL is linked from notices that need a person to act.
+	RunbookURL string
 }
 
 // Waker is told when there may be work for the dispatcher.
@@ -138,11 +146,15 @@ type Server struct {
 	reviewer Reviewer
 	comments *Comments
 	actions  *Actions
+
+	blockNotify []BlockNotifier
 }
 
 // New returns a Server backed by st. waker and notifier may be nil.
 func New(st Store, opts Options, waker Waker, notifier Notifier) *Server {
-	return &Server{store: st, opts: opts, metrics: newMetrics(), now: time.Now, waker: waker, notifier: notifier}
+	m := newMetrics()
+	m.registry.MustRegister(newStateCollector(st))
+	return &Server{store: st, opts: opts, metrics: m, now: time.Now, waker: waker, notifier: notifier}
 }
 
 // EnablePRs turns on the PR path: propose_pr for runners, the PR poller,

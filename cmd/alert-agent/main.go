@@ -91,6 +91,7 @@ func runController(ctx context.Context) error {
 		ChatMaxPerHour: envInt("CHAT_MAX_PER_HOUR", 12),
 		// CHAT_MAX_PER_PR_HOUR is the 0.10-0.12 name, still read during the move.
 		ChatMaxPerThreadHour: envInt("CHAT_MAX_PER_THREAD_HOUR", envInt("CHAT_MAX_PER_PR_HOUR", 4)),
+		RunbookURL:           os.Getenv("RUNBOOK_URL"),
 	}
 
 	var notifier controller.Notifier
@@ -114,6 +115,12 @@ func runController(ctx context.Context) error {
 		return err
 	}
 	srv = controller.New(st, opts, d, notifier)
+	srv.EnableBlockNotices(newBlockNotifiers(notifier)...)
+	if get, err := tokenDateReader(); err != nil {
+		slog.Warn("claude token age not exported", "err", err)
+	} else {
+		srv.WatchTokenDate(ctx, get, 10*time.Minute)
+	}
 	if os.Getenv("PR_ENABLED") == "true" {
 		srv.EnablePRs(newPRs(app), newReviewer(notifier))
 		slog.Info("PR path enabled: runners may propose_pr")
@@ -241,6 +248,47 @@ func newComments(app *github.App) *controller.Comments {
 	}
 	return &controller.Comments{GitHub: app, AllowedLogins: logins, Interval: envDuration("COMMENT_POLL_INTERVAL", 30*time.Second)}
 }
+
+// newBlockNotifiers sends "Claude refuses every run" to ntfy and Slack,
+// whichever of them is configured.
+func newBlockNotifiers(slack controller.Notifier) []controller.BlockNotifier {
+	var ns []controller.BlockNotifier
+	if base, token := os.Getenv("NTFY_URL"), os.Getenv("NTFY_TOKEN"); base != "" && token != "" {
+		ns = append(ns, &controller.NtfyReviewer{BaseURL: base, Topic: envOr("NTFY_TOPIC", "medic"), Token: token})
+	}
+	if n, ok := slack.(controller.BlockNotifier); ok {
+		ns = append(ns, n)
+	}
+	return ns
+}
+
+// tokenDateReader reads the token-created annotation from the Claude
+// Secret, which the controller may already get (it mounts this namespace's
+// Secrets); only the annotation is read, never the token.
+func tokenDateReader() (func(context.Context) (time.Time, error), error) {
+	cfg, err := rest.InClusterConfig()
+	if err != nil {
+		return nil, fmt.Errorf("kubernetes config: %w", err)
+	}
+	kube, err := kubernetes.NewForConfig(cfg)
+	if err != nil {
+		return nil, err
+	}
+	ns, name := envOr("POD_NAMESPACE", "alert-agent"), envOr("CLAUDE_SECRET", "alert-agent-claude")
+	return func(ctx context.Context) (time.Time, error) {
+		sec, err := kube.CoreV1().Secrets(ns).Get(ctx, name, metav1.GetOptions{})
+		if err != nil {
+			return time.Time{}, err
+		}
+		v, ok := sec.Annotations[tokenCreatedAnnotation]
+		if !ok {
+			return time.Time{}, fmt.Errorf("secret %s/%s has no %s annotation", ns, name, tokenCreatedAnnotation)
+		}
+		return controller.ParseTokenDate(v)
+	}, nil
+}
+
+const tokenCreatedAnnotation = "alert-agent/token-created"
 
 // newReviewer sends "needs your review" to ntfy and to Slack, whichever of
 // them is configured, or is nil if neither is.
