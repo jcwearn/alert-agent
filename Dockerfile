@@ -7,7 +7,7 @@
 # Base images are pinned by digest. Tool versions are ARGs carrying a
 # `# renovate:` comment, which config:best-practices' Dockerfile manager bumps.
 
-FROM golang:1.27@sha256:205c7636d74e0ffbe3d007162df7d74f859f5a8c8322dfb9f907977686c126cf AS build
+FROM golang:1.27@sha256:5f1b98fa02fe396ebce2a0227a0e08309e11792915b9dd2e1f71053d7e7e6666 AS build
 
 WORKDIR /src
 
@@ -23,10 +23,10 @@ RUN CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/alert-agent ./cmd/
 # against a file fetched from the same release is weaker than a pinned hash,
 # but it survives a Renovate bump without a hand edit, and it still catches a
 # corrupt or truncated download.
-FROM golang:1.27@sha256:205c7636d74e0ffbe3d007162df7d74f859f5a8c8322dfb9f907977686c126cf AS tools
+FROM golang:1.27@sha256:5f1b98fa02fe396ebce2a0227a0e08309e11792915b9dd2e1f71053d7e7e6666 AS tools
 
 # renovate: datasource=github-releases depName=kubernetes/kubernetes
-ARG KUBECTL_VERSION=v1.36.6
+ARG KUBECTL_VERSION=v1.37.3
 # renovate: datasource=github-releases depName=fluxcd/flux2
 ARG FLUX_VERSION=v2.10.1
 # renovate: datasource=github-releases depName=kubernetes-sigs/kustomize extractVersion=^kustomize/(?<version>v.+)$
