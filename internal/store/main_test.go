@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	embeddedpostgres "github.com/fergusstrange/embedded-postgres"
+	embeddedpostgres "github.com/fergusstrange/embedded-postgres/v2"
 )
 
 // testDatabaseURL is the Postgres every test in this package uses. Each test
