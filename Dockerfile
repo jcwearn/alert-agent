@@ -57,7 +57,7 @@ RUN set -eux; \
 FROM node:26-slim@sha256:abe7e5a82b61a8ef67b315b85497c9e65173387ccf2f4a029248184b8e020be5 AS claude
 
 # renovate: datasource=npm depName=@anthropic-ai/claude-code-linux-x64
-ARG CLAUDE_CODE_VERSION=2.1.331
+ARG CLAUDE_CODE_VERSION=2.1.332
 
 WORKDIR /dl
 RUN set -eux; \
